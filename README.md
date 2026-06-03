@@ -81,14 +81,42 @@ All examples use the dogfood target bundle id `ai.rackmind.macos`.
 ```sh
 swiftplay launch -b ai.rackmind.macos
 swiftplay launch --path /path/to/App.app
-swiftplay launch -b ai.rackmind.macos --show   # visible/foreground
+swiftplay launch -b ai.rackmind.macos --offscreen   # rendered but off-display (capturable)
+swiftplay launch -b ai.rackmind.macos --show        # visible/foreground
 ```
 
 Launches the target **hidden + in the background** (`open -g -j`): the window never
 appears on screen and your current app keeps focus. AX queries and
 `CGEvent.postToPid` still reach a hidden app, so swiftplay drives it fully headless
-from there. Use `--show` if you actually want to see it (or need mouse `click` /
-menu key-equivalents — see Background mode).
+from there.
+
+`--offscreen` makes the app **truly invisible while still rendering** — the mode
+for a headless visual pass. It creates a *headless virtual display* (a real
+display with no physical monitor, via the private `CGVirtualDisplay` API), moves
+the window onto it, and holds it there for the session with a detached
+`hold-display` process. The window renders normally — so `screenshot` captures
+real content — but lives on a screen you can't see, with focus never moving. When
+the app exits (or the holder is killed) the virtual display is torn down
+automatically.
+
+This is the native equivalent of a browser's offscreen compositor — the trick
+that lets Playwright screenshot Electron headlessly. macOS only gives a window a
+backing surface when it's on *some* display, so a hidden window is blank to
+ScreenCaptureKit; a virtual display gives it one that isn't visible.
+
+Fallbacks, if the virtual display can't be created: park the window fully on a
+secondary physical display, else tuck the unavoidable ~40px sliver into a corner
+(macOS won't let a foreign window move *fully* off a physical display).
+
+> `--offscreen` uses two private APIs (`CGVirtualDisplay` + `_AXUIElementGetWindow`)
+> — the only place swiftplay reaches past the public AX/CGEvent/SCK surface. The
+> driver is un-sandboxed and never ships via the Mac App Store, so that's fine.
+> Captures on the virtual display are currently 1× (non-retina); everything else
+> is unaffected. Moving the window to a separate *Space* would also work but is
+> locked down without disabling SIP, which swiftplay won't ask you to do.
+
+Use `--show` if you actually want to watch it (or need mouse `click` / menu
+key-equivalents — see Background mode).
 
 ### `tree` — dump the AX element tree
 
@@ -145,6 +173,40 @@ swiftplay click -t "Save" -b ai.rackmind.macos
 
 `--ax` performs the element's AX press action instead of a mouse click (see
 Background mode).
+
+### `screenshot` — capture a window to PNG
+
+```sh
+swiftplay screenshot -b ai.rackmind.macos -o shot.png
+swiftplay screenshot -b ai.rackmind.macos --window-title Settings -o settings.png
+```
+
+Captures a single window via ScreenCaptureKit — shadow-free, wallpaper-free, at
+native (retina) pixel resolution. With no `--window-title` it grabs the largest
+window (the main one). Combine with `click`/`type`/`press` for a full
+drive-and-screenshot visual pass — no in-app harness needed.
+
+Needs **Screen Recording** permission (separate from Accessibility — granted to
+your terminal app; see Permissions). A window launched fully hidden (`launch`
+without `--show`) may have no backing store to capture, so use `--show` for a
+visual pass.
+
+### `config` — view and change defaults (the control center)
+
+```sh
+swiftplay config list                              # every setting + value
+swiftplay config get offscreen.mode
+swiftplay config set offscreen.mode virtual        # virtual | secondary | corner
+swiftplay config set offscreen.retina true         # 2× headless captures
+swiftplay config set defaults.bundleId ai.rackmind.macos
+swiftplay config set defaults.bundleId             # (no value resets it)
+swiftplay config path                              # ~/.swiftplay/config.json
+```
+
+git-style get/set/list over `~/.swiftplay/config.json`. Commands read these
+defaults: `offscreen.mode`/`offscreen.retina` drive `launch --offscreen`,
+`defaults.bundleId` lets you drop `-b` on every command, and `screenshot.dir`
+is where bare-filename screenshots land. The menu-bar app edits the same file.
 
 ### `test` — run test scripts and report
 
@@ -207,6 +269,22 @@ server** (your terminal, or the agent app launching it) must be granted
 Accessibility. AX-dependent tools return an error result with guidance if it
 isn't, rather than crashing the server.
 
+## Menu-bar control center
+
+`swiftplay-menubar` is a tiny menu-bar app (no Dock icon) that reads and writes
+the same `~/.swiftplay/config.json` the CLI uses — a visual front end for
+`swiftplay config`. From its dropdown you can switch the offscreen mode, toggle
+retina, see the configured default app and screenshot dir, watch whether a
+headless session is live, stop that session, or open the config file to edit.
+
+```sh
+make menubar     # build + launch it (or run .build/debug/swiftplay-menubar)
+```
+
+Because it edits the shared config, anything you change here changes what
+`swiftplay launch --offscreen` does on the next run — and CLI-side edits show up
+the next time you open the menu.
+
 ## Background / headless mode
 
 By default `type` and `press` deliver events via `CGEvent.postToPid`, and
@@ -243,6 +321,10 @@ Pass `--foreground` to bring the target app forward first. You need it for:
 
 - Runnable end-to-end suite:
   [`examples/rackmind-macos/skill-picker.sh`](./examples/rackmind-macos/skill-picker.sh)
+- Headless crash sweep (every surface, "didn't crash"):
+  [`examples/rackmind-macos/smoke-nav.sh`](./examples/rackmind-macos/smoke-nav.sh)
+- Headless **visual** sweep (every surface → PNG catalog, "rendered, here's proof"):
+  [`examples/rackmind-macos/smoke-visual.sh`](./examples/rackmind-macos/smoke-visual.sh)
 - Findings, gotchas, and what works today:
   [`examples/rackmind-macos/FINDINGS.md`](./examples/rackmind-macos/FINDINGS.md)
 

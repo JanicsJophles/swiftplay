@@ -14,6 +14,9 @@ struct Swiftplay: ParsableCommand {
             TypeCommand.self,
             PressCommand.self,
             ClickCommand.self,
+            ScreenshotCommand.self,
+            HoldDisplayCommand.self,
+            ConfigCommand.self,
             TestCommand.self,
             MCPCommand.self,
         ]

@@ -7,7 +7,7 @@ SWIFT := env -u TOOLCHAINS xcrun --toolchain XcodeDefault swift
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/bin
 
-.PHONY: build release install uninstall test clean
+.PHONY: build release menubar install uninstall test clean
 
 ## build a debug binary at .build/debug/swiftplay
 build:
@@ -17,16 +17,23 @@ build:
 release:
 	$(SWIFT) build -c release --product swiftplay
 
-## build release + install `swiftplay` onto your PATH
+## build + run the menu-bar control center (swiftplay-menubar)
+menubar:
+	$(SWIFT) build --product swiftplay-menubar
+	.build/debug/swiftplay-menubar &
+
+## build release + install both binaries onto your PATH
 ## override the location with: make install PREFIX=$$HOME/.local
 install: release
+	@$(SWIFT) build -c release --product swiftplay-menubar
 	@mkdir -p "$(BINDIR)"
 	@install -m 0755 .build/release/swiftplay "$(BINDIR)/swiftplay"
-	@echo "installed swiftplay -> $(BINDIR)/swiftplay"
+	@install -m 0755 .build/release/swiftplay-menubar "$(BINDIR)/swiftplay-menubar"
+	@echo "installed swiftplay + swiftplay-menubar -> $(BINDIR)/"
 
 uninstall:
-	@rm -f "$(BINDIR)/swiftplay"
-	@echo "removed $(BINDIR)/swiftplay"
+	@rm -f "$(BINDIR)/swiftplay" "$(BINDIR)/swiftplay-menubar"
+	@echo "removed swiftplay + swiftplay-menubar from $(BINDIR)"
 
 ## run the example suites (needs a Mac with Accessibility granted)
 test: build

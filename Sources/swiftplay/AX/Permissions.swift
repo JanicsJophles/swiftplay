@@ -1,5 +1,36 @@
 import ApplicationServices
+import CoreGraphics
 import Foundation
+
+/// Screen Recording is a *separate* TCC grant from Accessibility — ScreenCaptureKit
+/// needs it, AX queries don't. Like Accessibility, when swiftplay runs via the
+/// terminal the grant attaches to the terminal app, not the binary.
+enum ScreenRecordingPermission {
+    static var isGranted: Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    @discardableResult
+    static func request() -> Bool {
+        CGRequestScreenCaptureAccess()
+    }
+
+    static func printGuidance() {
+        let message = """
+        swiftplay needs Screen Recording permission to capture windows.
+
+        This is separate from Accessibility. When you run swiftplay from a
+        terminal, the permission attaches to your TERMINAL APP (Terminal.app,
+        iTerm2, WezTerm, …) — not to the swiftplay binary.
+
+        Open System Settings → Privacy & Security → Screen Recording,
+        enable your terminal app, then re-run this command. (macOS may ask you
+        to quit and reopen the terminal for the grant to take effect.)
+
+        """
+        FileHandle.standardError.write(Data(message.utf8))
+    }
+}
 
 enum AccessibilityPermission {
     static var isTrusted: Bool {
