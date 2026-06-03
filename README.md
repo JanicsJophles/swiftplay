@@ -10,6 +10,8 @@ tree by role/label/text, drive the keyboard, and click controls — with no Xcod
 project, no XCUITest, and no test bundle. It reads the app's live AX tree and
 synthesizes input events, so it works against any pid / bundle id from the outside.
 
+![swiftplay locating, driving, and verifying a native macOS app from the terminal — fully headless](docs/demo.gif)
+
 ## Build
 
 ```sh
