@@ -1,0 +1,40 @@
+name: CI
+
+# Build-only CI. swiftplay drives apps through the macOS Accessibility (TCC)
+# permission, which CANNOT be granted on a hosted GitHub runner — so the dogfood
+# suite can't run here. What this proves is that the project compiles in a clean,
+# vanilla macOS environment (no swiftly toolchain mismatch) and that the binary
+# runs at all. Running the real test suite requires a self-hosted Mac with the
+# driver binary pre-approved in System Settings → Privacy & Security → Accessibility
+# (see CONTRIBUTING.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      # On a clean runner there is no swiftly mismatch, so a plain `swift build`
+      # works and independently verifies the project builds in a vanilla
+      # environment. Scoped to the product to skip the DocC plugin.
+      - name: Build
+        run: swift build --product swiftplay
+
+      - name: Smoke check (CLI runs without Accessibility)
+        run: |
+          BIN="$(swift build --product swiftplay --show-bin-path)/swiftplay"
+          "$BIN" --help
+          "$BIN" --version
