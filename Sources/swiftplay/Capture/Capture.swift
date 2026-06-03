@@ -39,18 +39,27 @@ enum Capture {
         let pointSize: CGSize
     }
 
+    /// Carries the async result out of the `Task` below. The `Task` closure is
+    /// `@Sendable`, so it can't capture-and-mutate a local `var` — it writes into
+    /// this reference box instead. The semaphore (signal happens-before wait
+    /// returns) provides the ordering that makes the single hand-off safe, hence
+    /// `@unchecked Sendable`.
+    private final class Box<Value>: @unchecked Sendable {
+        var value: Value?
+    }
+
     /// Synchronous bridge over SCK's async API. The root command is a plain
     /// `ParsableCommand`, so we block the calling thread on a semaphore while the
     /// capture runs on the Swift concurrency pool (a different thread — no
     /// deadlock).
     static func window(pid: pid_t, titleContains: String?) throws -> Result {
         let sema = DispatchSemaphore(value: 0)
-        var outcome: Swift.Result<Result, Error>!
+        let outcome = Box<Swift.Result<Result, Error>>()
         Task {
             do {
-                outcome = .success(try await captureWindow(pid: pid, titleContains: titleContains))
+                outcome.value = .success(try await captureWindow(pid: pid, titleContains: titleContains))
             } catch {
-                outcome = .failure(error)
+                outcome.value = .failure(error)
             }
             sema.signal()
         }
@@ -59,7 +68,10 @@ enum Capture {
         guard sema.wait(timeout: .now() + 30) == .success else {
             throw CaptureError.captureFailed("ScreenCaptureKit did not return within 30s")
         }
-        return try outcome.get()
+        guard let result = outcome.value else {
+            throw CaptureError.captureFailed("capture finished without producing a result")
+        }
+        return try result.get()
     }
 
     /// Backing scale of the display the window sits on, derived from CGS so it's
