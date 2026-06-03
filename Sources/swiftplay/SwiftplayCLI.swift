@@ -5,7 +5,7 @@ struct Swiftplay: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "swiftplay",
         abstract: "Playwright-style end-to-end testing for native macOS apps.",
-        version: "0.0.0",
+        version: "0.1.0",
         subcommands: [
             LaunchCommand.self,
             TreeCommand.self,
