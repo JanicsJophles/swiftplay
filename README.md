@@ -12,6 +12,20 @@ synthesizes input events, so it works against any pid / bundle id from the outsi
 
 ![swiftplay locating, driving, and verifying a native macOS app from the terminal — fully headless](docs/demo.gif)
 
+## Why swiftplay exists
+
+swiftplay was built to test [**rackmind**](https://rackmind.ai) — an AI agent for
+your homelab. rackmind's web and Electron surfaces get the full
+[Playwright](https://playwright.dev) treatment, but its Mac app is native SwiftUI,
+and Playwright can't drive that. The only sanctioned option there is XCUITest:
+slow, flaky, Xcode-bound, with no working recorder for Mac targets and your tests
+caged inside a test bundle.
+
+So this is the tool we wished existed — Playwright's auto-waiting, locator-first
+ergonomics, pointed at the native AppKit / SwiftUI layer instead. rackmind's Mac
+app is still swiftplay's first real-world target; the dogfood suite that drives it
+lives in [`examples/rackmind-macos/`](./examples/rackmind-macos/).
+
 ## Build
 
 ```sh
