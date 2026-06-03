@@ -59,7 +59,10 @@ final class MenuController: NSObject, NSMenuDelegate {
         menu.addItem(retina)
         menu.addItem(.separator())
 
-        menu.addItem(disabled("Default app:  \(config.defaults.bundleId ?? "—")"))
+        // Default-app picker — pick from running apps, no JSON editing needed.
+        let appItem = NSMenuItem(title: "Default App:  \(defaultAppDisplayName(config.defaults.bundleId))", action: nil, keyEquivalent: "")
+        appItem.submenu = buildAppMenu(current: config.defaults.bundleId)
+        menu.addItem(appItem)
         menu.addItem(disabled("Screenshots:  \(config.screenshot.dir)"))
         menu.addItem(.separator())
 
@@ -93,6 +96,50 @@ final class MenuController: NSObject, NSMenuDelegate {
         return item
     }
 
+    /// A submenu listing running apps (plus the current selection even if it
+    /// isn't running) so the default bundle id can be set with a click.
+    private func buildAppMenu(current: String?) -> NSMenu {
+        let menu = NSMenu()
+
+        let none = NSMenuItem(title: "None", action: #selector(selectDefaultApp(_:)), keyEquivalent: "")
+        none.target = self
+        none.representedObject = ""  // empty string clears the default
+        none.state = (current == nil) ? .on : .off
+        menu.addItem(none)
+        menu.addItem(.separator())
+
+        // Regular (Dock-visible) apps with a bundle id — skips daemons, agents,
+        // and our own menu-bar process. De-duplicated and sorted by name.
+        var byBundleId: [String: String] = [:]  // bundleId -> display name
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular {
+            if let bundleId = app.bundleIdentifier, byBundleId[bundleId] == nil {
+                byBundleId[bundleId] = app.localizedName ?? bundleId
+            }
+        }
+        if let current, byBundleId[current] == nil {
+            byBundleId[current] = current  // keep the current selection visible even if not running
+        }
+
+        for (bundleId, name) in byBundleId.sorted(by: { $0.value.localizedCaseInsensitiveCompare($1.value) == .orderedAscending }) {
+            let item = NSMenuItem(title: name, action: #selector(selectDefaultApp(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = bundleId
+            item.toolTip = bundleId
+            item.state = (bundleId == current) ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    /// Display label for the current default: the running app's name if we can
+    /// resolve it, else the bundle id, else an em dash.
+    private func defaultAppDisplayName(_ bundleId: String?) -> String {
+        guard let bundleId else { return "—" }
+        let running = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == bundleId }
+        return running?.localizedName ?? bundleId
+    }
+
     // MARK: - Actions
 
     @objc private func selectMode(_ sender: NSMenuItem) {
@@ -102,6 +149,11 @@ final class MenuController: NSObject, NSMenuDelegate {
 
     @objc private func toggleRetina() {
         mutate { try $0.set(.offscreenRetina, ConfigStore.load().offscreen.retina ? "false" : "true") }
+    }
+
+    @objc private func selectDefaultApp(_ sender: NSMenuItem) {
+        guard let bundleId = sender.representedObject as? String else { return }
+        mutate { try $0.set(.defaultBundleId, bundleId) }  // "" clears it
     }
 
     @objc private func editConfig() {

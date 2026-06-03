@@ -36,20 +36,23 @@ struct HoldDisplayCommand: ParsableCommand {
         // we re-read the actual point bounds afterwards to center the window.
         if config.offscreen.mode == .virtual {
             // Display sized (in points) a bit larger than the window so we can
-            // center it. Retina is applied at *creation* (HiDPI backing) — we never
-            // reconfigure display modes at runtime, which can disrupt the desktop.
+            // center it.
             let margin = 200
-            if let vd = VirtualDisplay(pointWidth: Int(size.width) + margin,
-                                       pointHeight: Int(size.height) + margin,
-                                       retina: config.offscreen.retina) {
-                var retinaNote = ""
-                if config.offscreen.retina {
-                    retinaNote = vd.isRetina ? " (retina 2×)" : " (retina requested but display came up 1×)"
-                }
+            let vdWidth = Int(size.width) + margin
+            let vdHeight = Int(size.height) + margin
+            if let vd = VirtualDisplay(pointWidth: vdWidth, pointHeight: vdHeight, retina: config.offscreen.retina) {
                 let b = vd.bounds
                 let target = CGPoint(x: b.minX + max(0, (b.width - size.width) / 2),
                                      y: b.minY + max(0, (b.height - size.height) / 2))
                 window.setPosition(target)
+
+                // Select the 2× mode *after* placing the window (same point size,
+                // so the window doesn't move). Scoped to this virtual display only.
+                var retinaNote = ""
+                if config.offscreen.retina {
+                    let ok = vd.enableRetina(pointWidth: vdWidth, pointHeight: vdHeight)
+                    retinaNote = ok ? " (retina 2×)" : " (retina requested but unavailable)"
+                }
                 FileHandle.standardError.write(Data("hold-display: parked on virtual display \(vd.displayID)\(retinaNote) — invisible\n".utf8))
 
                 // Hold the display alive until the app goes away. The vd local stays

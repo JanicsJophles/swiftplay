@@ -104,6 +104,11 @@ that lets Playwright screenshot Electron headlessly. macOS only gives a window a
 backing surface when it's on *some* display, so a hidden window is blank to
 ScreenCaptureKit; a virtual display gives it one that isn't visible.
 
+With `offscreen.retina` enabled (`swiftplay config set offscreen.retina true`),
+the virtual display is switched to a 2× HiDPI mode so captures come out at full
+retina resolution; otherwise it's 1×. The mode switch is scoped to the virtual
+display alone — physical displays are never reconfigured.
+
 Fallbacks, if the virtual display can't be created: park the window fully on a
 secondary physical display, else tuck the unavoidable ~40px sliver into a corner
 (macOS won't let a foreign window move *fully* off a physical display).
@@ -111,9 +116,8 @@ secondary physical display, else tuck the unavoidable ~40px sliver into a corner
 > `--offscreen` uses two private APIs (`CGVirtualDisplay` + `_AXUIElementGetWindow`)
 > — the only place swiftplay reaches past the public AX/CGEvent/SCK surface. The
 > driver is un-sandboxed and never ships via the Mac App Store, so that's fine.
-> Captures on the virtual display are currently 1× (non-retina); everything else
-> is unaffected. Moving the window to a separate *Space* would also work but is
-> locked down without disabling SIP, which swiftplay won't ask you to do.
+> Moving the window to a separate *Space* would also work but is locked down
+> without disabling SIP, which swiftplay won't ask you to do.
 
 Use `--show` if you actually want to watch it (or need mouse `click` / menu
 key-equivalents — see Background mode).
