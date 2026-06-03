@@ -26,24 +26,31 @@ ergonomics, pointed at the native AppKit / SwiftUI layer instead. rackmind's Mac
 app is still swiftplay's first real-world target; the dogfood suite that drives it
 lives in [`examples/rackmind-macos/`](./examples/rackmind-macos/).
 
-## Build
+## Install
+
+Needs macOS 14+ and Xcode installed. From a clone:
 
 ```sh
-env -u TOOLCHAINS xcrun --toolchain XcodeDefault swift build --product swiftplay
+make install        # builds an optimized binary + puts `swiftplay` on your PATH
 ```
 
-Use this exact command — **not** a bare `swift build`. The `swift` on `PATH` here
-is a swiftly-managed toolchain whose Swift frontend mismatches the installed macOS
-SDK; a plain `swift build` crashes the compiler frontend (and the
-swift-argument-parser DocC plugin crashes it the same way, which is why we scope to
-`--product swiftplay`). The `xcrun --toolchain XcodeDefault` invocation pins the
-build to Xcode's default toolchain, which matches the SDK.
+That installs to `/usr/local/bin`; install elsewhere with
+`make install PREFIX="$HOME/.local"`. Prefer to run it in place without installing?
+Build a debug binary and call it directly:
 
-The binary lands at:
+```sh
+make build          # → .build/debug/swiftplay
+```
 
-```
-.build/debug/swiftplay
-```
+`make` pins the build to Xcode's toolchain via `xcrun --toolchain XcodeDefault`,
+because the `swift` on many machines is a swiftly-managed toolchain whose frontend
+mismatches the macOS SDK and crashes the compiler. (Raw command, sans `make`:
+`env -u TOOLCHAINS xcrun --toolchain XcodeDefault swift build --product swiftplay`.)
+
+> A Homebrew tap (`brew install …`) is on the way — see [issues](https://github.com/JanicsJophles/swiftplay/issues).
+
+The examples below assume `swiftplay` is on your `PATH`. Not installed? Just prefix
+them with the build path, e.g. `./.build/debug/swiftplay tree …`.
 
 ## Permissions
 
@@ -66,9 +73,9 @@ All examples use the dogfood target bundle id `ai.rackmind.macos`.
 ### `launch` — start the app hidden (headless)
 
 ```sh
-.build/debug/swiftplay launch -b ai.rackmind.macos
-.build/debug/swiftplay launch --path /path/to/App.app
-.build/debug/swiftplay launch -b ai.rackmind.macos --show   # visible/foreground
+swiftplay launch -b ai.rackmind.macos
+swiftplay launch --path /path/to/App.app
+swiftplay launch -b ai.rackmind.macos --show   # visible/foreground
 ```
 
 Launches the target **hidden + in the background** (`open -g -j`): the window never
@@ -80,22 +87,22 @@ menu key-equivalents — see Background mode).
 ### `tree` — dump the AX element tree
 
 ```sh
-.build/debug/swiftplay tree -b ai.rackmind.macos
-.build/debug/swiftplay tree -b ai.rackmind.macos --show-geometry
+swiftplay tree -b ai.rackmind.macos
+swiftplay tree -b ai.rackmind.macos --show-geometry
 ```
 
 ### `inspect` — print the element under the mouse cursor
 
 ```sh
-.build/debug/swiftplay inspect
+swiftplay inspect
 ```
 
 ### `find` — locate elements (assertion oracle)
 
 ```sh
-.build/debug/swiftplay find -t "Dashboard"
-.build/debug/swiftplay find -t skill-row-/monitor --role AXButton
-.build/debug/swiftplay find -t "Dashboard" --count
+swiftplay find -t "Dashboard"
+swiftplay find -t skill-row-/monitor --role AXButton
+swiftplay find -t "Dashboard" --count
 ```
 
 `find` exits **non-zero when nothing matches**, so it doubles as a test
@@ -104,18 +111,18 @@ assertion — drop it in a script and a missing element fails the suite.
 ### `type` — type literal text into the focused element
 
 ```sh
-.build/debug/swiftplay type "hello world"
-.build/debug/swiftplay type "/" -b ai.rackmind.macos
-.build/debug/swiftplay type "hello" -b ai.rackmind.macos --foreground
+swiftplay type "hello world"
+swiftplay type "/" -b ai.rackmind.macos
+swiftplay type "hello" -b ai.rackmind.macos --foreground
 ```
 
 ### `press` — press a named key or chord
 
 ```sh
-.build/debug/swiftplay press down
-.build/debug/swiftplay press tab
-.build/debug/swiftplay press down --repeat 3
-.build/debug/swiftplay press cmd+k -b ai.rackmind.macos --foreground
+swiftplay press down
+swiftplay press tab
+swiftplay press down --repeat 3
+swiftplay press cmd+k -b ai.rackmind.macos --foreground
 ```
 
 Accepts a named key (`down`/`up`/`left`/`right`/`tab`/`return`/`escape`/`space`/
@@ -125,9 +132,9 @@ Accepts a named key (`down`/`up`/`left`/`right`/`tab`/`return`/`escape`/`space`/
 ### `click` — click an element by text/role
 
 ```sh
-.build/debug/swiftplay click -t "Dashboard"
-.build/debug/swiftplay click -t skill-row-/monitor --role AXButton --ax
-.build/debug/swiftplay click -t "Save" -b ai.rackmind.macos
+swiftplay click -t "Dashboard"
+swiftplay click -t skill-row-/monitor --role AXButton --ax
+swiftplay click -t "Save" -b ai.rackmind.macos
 ```
 
 `--ax` performs the element's AX press action instead of a mouse click (see
@@ -136,9 +143,9 @@ Background mode).
 ### `test` — run test scripts and report
 
 ```sh
-.build/debug/swiftplay test --dir examples/rackmind-macos
-.build/debug/swiftplay test examples/rackmind-macos/smoke-nav.sh
-.build/debug/swiftplay test --dir examples/rackmind-macos -v
+swiftplay test --dir examples/rackmind-macos
+swiftplay test examples/rackmind-macos/smoke-nav.sh
+swiftplay test --dir examples/rackmind-macos -v
 ```
 
 A test is an executable script that exits 0 on success. `test` runs them
@@ -150,7 +157,7 @@ scripts today, native TS/Swift test files later.
 ### `mcp` — run as an MCP server (drive apps from an agent)
 
 ```sh
-.build/debug/swiftplay mcp
+swiftplay mcp
 ```
 
 Exposes swiftplay over the [Model Context Protocol](https://modelcontextprotocol.io)
@@ -170,7 +177,7 @@ stdin/stdout (logs go to stderr). Tools:
 Register it with Claude Code:
 
 ```sh
-claude mcp add swiftplay -- /absolute/path/to/.build/debug/swiftplay mcp
+claude mcp add swiftplay -- swiftplay mcp
 ```
 
 Or in a `claude_desktop_config.json` / `mcp.json`:
@@ -179,12 +186,15 @@ Or in a `claude_desktop_config.json` / `mcp.json`:
 {
   "mcpServers": {
     "swiftplay": {
-      "command": "/absolute/path/to/.build/debug/swiftplay",
+      "command": "swiftplay",
       "args": ["mcp"]
     }
   }
 }
 ```
+
+GUI apps (e.g. Claude Desktop) launch with a minimal `PATH` and may not find
+`swiftplay` — use its absolute path there (`command: "$(which swiftplay)"`).
 
 The same Accessibility permission applies: the **process that hosts the MCP
 server** (your terminal, or the agent app launching it) must be granted
