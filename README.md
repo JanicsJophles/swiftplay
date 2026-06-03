@@ -28,7 +28,15 @@ lives in [`examples/rackmind-macos/`](./examples/rackmind-macos/).
 
 ## Install
 
-Needs macOS 14+ and Xcode installed. From a clone:
+swiftplay builds from source, so you need **macOS 14+ and Xcode**.
+
+**Homebrew:**
+
+```sh
+brew install janicsjophles/swiftplay/swiftplay
+```
+
+**From a clone:**
 
 ```sh
 make install        # builds an optimized binary + puts `swiftplay` on your PATH
@@ -46,8 +54,6 @@ make build          # → .build/debug/swiftplay
 because the `swift` on many machines is a swiftly-managed toolchain whose frontend
 mismatches the macOS SDK and crashes the compiler. (Raw command, sans `make`:
 `env -u TOOLCHAINS xcrun --toolchain XcodeDefault swift build --product swiftplay`.)
-
-> A Homebrew tap (`brew install …`) is on the way — see [issues](https://github.com/JanicsJophles/swiftplay/issues).
 
 The examples below assume `swiftplay` is on your `PATH`. Not installed? Just prefix
 them with the build path, e.g. `./.build/debug/swiftplay tree …`.
