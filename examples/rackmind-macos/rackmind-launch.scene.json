@@ -1,0 +1,39 @@
+{
+  "bundleId": "ai.rackmind.macos",
+  "launch": "show",
+  "title": "RackMind",
+  "output": "rackmind-launch",
+  "look": {
+    "background": "#070a16,#101a3a",
+    "fps": 60,
+    "zoom": 1.9,
+    "padding": 0.09,
+    "cornerRadius": 0.014,
+    "cursor": true,
+    "captions": true,
+    "zoomIn": 0.55,
+    "zoomHold": 1.4,
+    "zoomOut": 0.6,
+    "tilt": { "y": -8, "x": 4 },
+    "perspective": 3.8,
+    "spring": { "enabled": true, "stiffness": 150, "damping": 18 }
+  },
+  "steps": [
+    { "do": "activate", "say": "Stop SSH'ing around." },
+    { "do": "wait", "ms": 2600 },
+    { "do": "click", "role": "AXButton", "label": "new-chat", "say": "Just ask." },
+    { "do": "wait", "ms": 900 },
+    { "do": "click", "label": "chat-composer" },
+    { "do": "wait", "ms": 500 },
+    { "do": "type", "text": "Deploy Jellyfin and Caddy reverse proxy to node-01.", "say": "Plain English. Your whole fleet." },
+    { "do": "wait", "ms": 1400 },
+    { "do": "press", "keys": "return", "say": "It reads your real fleet, plans, and provisions — with your approval." },
+    { "do": "wait", "ms": 17000 },
+    { "do": "click", "role": "AXButton", "label": "nav-dashboard", "say": "Your entire cluster." },
+    { "do": "wait", "ms": 2400, "say": "Handled." },
+    { "do": "click", "role": "AXButton", "label": "nav-knowledge", "say": "It remembers every box you run." },
+    { "do": "wait", "ms": 2200 },
+    { "do": "click", "role": "AXButton", "label": "nav-chat", "say": "RackMind" },
+    { "do": "wait", "ms": 1800 }
+  ]
+}

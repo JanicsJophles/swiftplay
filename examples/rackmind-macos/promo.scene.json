@@ -1,0 +1,31 @@
+{
+  "bundleId": "ai.rackmind.macos",
+  "launch": "show",
+  "title": "RackMind",
+  "output": "rackmind-promo",
+  "look": {
+    "background": "#0a0e1f,#1a2348",
+    "fps": 60,
+    "zoom": 2.4,
+    "padding": 0.08,
+    "cornerRadius": 0.014,
+    "zoomIn": 0.5,
+    "zoomHold": 1.25,
+    "zoomOut": 0.55
+  },
+  "steps": [
+    { "do": "wait", "ms": 2800, "say": "Your whole homelab — one question away" },
+    { "do": "click", "role": "AXButton", "label": "nav-dashboard", "say": "Every node, at a glance" },
+    { "do": "wait", "ms": 1600 },
+    { "do": "click", "role": "AXButton", "label": "nav-terminal", "say": "Drop into any box, instantly" },
+    { "do": "wait", "ms": 1600 },
+    { "do": "click", "role": "AXButton", "label": "nav-knowledge", "say": "Search your own docs with RAG" },
+    { "do": "wait", "ms": 1600 },
+    { "do": "click", "role": "AXButton", "label": "nav-chat", "say": "Or just ask." },
+    { "do": "wait", "ms": 1100 },
+    { "do": "type", "text": "/", "say": "Deploy, back up, secure — one slash away" },
+    { "do": "wait", "ms": 2300 },
+    { "do": "press", "keys": "escape" },
+    { "do": "wait", "ms": 1700, "say": "RackMind" }
+  ]
+}
