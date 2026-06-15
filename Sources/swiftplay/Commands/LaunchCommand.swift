@@ -50,6 +50,26 @@ struct LaunchCommand: ParsableCommand {
             throw ExitCode(2)
         }
 
+        // A non-foreground launch (`open -g`) never *activates* the app, and a
+        // SwiftUI `WindowGroup`'s default window is created on first activation —
+        // so on `-g`/`-g -j` the only path that yields a content window is macOS
+        // *state restoration*. When a code change alters the mangled type name of
+        // the window's content (most scene-level modifier edits), restoration
+        // finds no matching scene and silently creates nothing: the app comes up
+        // menu-bar-only (a 1512×33 sliver), the AX tree is empty, and `screenshot`
+        // captures a tiny blank placeholder (~15 KB). This is the flake behind
+        // RAC-432 — it presents as "focus stayed elsewhere" because the app never
+        // came forward to build its window. Suppressing restoration forces the
+        // default-window path to run even without activation, so the real content
+        // window (e.g. 1200×800) renders and captures. Harmless for `--show`
+        // (foreground activation builds the window anyway), so we only set it for
+        // the headless modes; the caller is expected to clear it after the run
+        // (the smoke scripts' cleanup trap does). See examples/rackmind-macos
+        // FINDINGS.md "Gotcha 4".
+        if !show, let restorationBundleId = bundleId ?? Bundle(url: URL(fileURLWithPath: appPath))?.bundleIdentifier {
+            suppressWindowRestoration(bundleId: restorationBundleId)
+        }
+
         // `open -g` = don't bring to foreground; `-j` = launch hidden.
         //   • default       → `-g -j`: off-screen + focus preserved, but NOT rendered.
         //   • --offscreen    → `-g`   : rendered + focus preserved; we then move it off-display.
@@ -91,6 +111,31 @@ struct LaunchCommand: ParsableCommand {
 
         let mode = show ? "visible" : "hidden/background"
         FileHandle.standardError.write(Data("Launched \(appPath) (\(mode)).\n".utf8))
+    }
+
+    /// Write `ApplePersistenceIgnoreState = true` into the target app's defaults
+    /// domain so its next launch ignores stale saved window state and runs the
+    /// default-window code path (which, for a `WindowGroup`, builds the content
+    /// window). Done via `/usr/bin/defaults` so it lands in the *app's* domain,
+    /// not swiftplay's own. Best-effort: a failure here just means we're back to
+    /// the pre-fix behaviour, so we don't abort the launch on it.
+    ///
+    /// Note: this persists in the app's prefs until cleared. The headless smoke
+    /// scripts clear it in their cleanup trap; an interactive user who hits a
+    /// menu-bar-only relaunch can clear it with
+    /// `defaults delete <bundleId> ApplePersistenceIgnoreState`.
+    private func suppressWindowRestoration(bundleId: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        proc.arguments = ["write", bundleId, "ApplePersistenceIgnoreState", "-bool", "true"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            // best-effort — fall through to the original behaviour
+        }
     }
 
     /// Spawn `swiftplay hold-display` detached. It owns the virtual display and

@@ -99,3 +99,48 @@ which reads `~/Library/Application Support/RackMind/servers.json`. The suite
 seeds a throwaway server there (and restores the original on exit) to reach
 Chat. When swiftplay grows a real runner, this is the kind of thing a
 `reset()` / state-seeding fixture should own (roadmap v0.4).
+
+## Gotcha 4 — window-state restoration vs. rebuilt dev apps (2026-06-11)
+
+SwiftUI `WindowGroup` window restoration identifiers are the **mangled type
+name of the window's content**. When a code change alters that type (most
+edits to the scene-level modifier chain), macOS restoration finds no matching
+scene (`restoreWindowWithIdentifier → window=0x0`) — and on a **hidden**
+launch the fallback "create the default window" path never runs (it happens on
+activation, which headless launches never perform). Symptom: the app launches
+with menu bar only, 1512×33 "windows", empty AX tree; looks exactly like the
+new build is catastrophically broken. The PREVIOUS build keeps working because
+its type matches the saved identifier — so A/B tests "prove" the new code is
+at fault. It is not.
+
+Note `rm -rf ~/Library/Saved Application State/<bundle>.savedState` is NOT
+sufficient on macOS 26 — restoration state also lives behind
+`com.apple.appkit.restoration_storage`.
+
+**Fix for harness runs:** `defaults write ai.rackmind.macos
+ApplePersistenceIgnoreState -bool true` before launching (remember to delete
+it afterwards), or always `--show`-launch once after a scene-type change.
+Real users are unaffected (foreground launches create the window on
+activation).
+
+**Now automatic (RAC-432, 2026-06-15).** `swiftplay launch` sets
+`ApplePersistenceIgnoreState=true` on the target's defaults domain for every
+non-`--show` launch, so the content-window path runs without activation and the
+sliver/blank-capture flake can't recur. The smoke scripts clear the key in
+their cleanup trap so nothing persists on your prefs. This is also why the
+flake *looked* like focus loss ("frontmost stayed: Claude/Terminal"): the app
+never came forward, so it never built its window — the missing window, not the
+lost focus, was the real cause. `smoke-visual.sh`'s `shoot()` also re-captures a
+bounded number of times if a shot still comes back under `MIN_BYTES`, as
+belt-and-braces (a real window captures identically every time, so this only
+ever rescues a transient miss and never masks a genuinely blank surface — and a
+crashed app is reported as a crash, never retried).
+
+## Gotcha 5 — AXTable content makes tree walks explode
+
+The Settings → Audit Log tab renders a SwiftUI `Table` with (currently) ~700
+rows; NSTableView exposes every row/cell to AX and per-element IPC makes
+`tree`/`find` take **minutes** while that tab is frontmost (a full tree dump
+measured 4m00s for 156 printed lines). Navigate away from table-heavy
+surfaces before any locator query, or batch attribute reads
+(`AXUIElementCopyMultipleAttributeValues`) in swiftplay.

@@ -12,7 +12,10 @@
 # ScreenCaptureKit has a backing store to capture) but is parked off every
 # display, so it never appears on screen and focus never leaves your current
 # app. Each capture is sanity-checked for size to catch a blank/never-rendered
-# window.
+# window, and re-captured a bounded number of times if it comes back too small
+# (RAC-432 belt-and-braces on top of the restoration fix `launch` now applies —
+# a real window captures the same every time, so this never masks a genuinely
+# blank surface, and a crashed app is reported as a crash, not retried).
 #
 # Output PNGs land in $SHOTS (default: a timestamped dir under /tmp). Override:
 #   SHOTS=~/Desktop/rackmind-shots ./smoke-visual.sh
@@ -47,9 +50,23 @@ step() { # step <seconds> <cmd...>
 }
 
 shoot() { # shoot <surface-name> — screenshot the current surface, verify it's not blank
-  local name="$1" out="$SHOTS/$1.png"
-  step 35 "$SWIFTPLAY" screenshot -b "$BUNDLE" -o "$out" >/dev/null 2>&1
-  local bytes; bytes=$(stat -f%z "$out" 2>/dev/null || echo 0)
+  local name="$1" out="$SHOTS/$1.png" bytes=0 try
+  # Defense-in-depth on top of the restoration fix in `launch` (RAC-432): if a
+  # capture comes back under MIN_BYTES it's the off-screen/menu-bar-sliver
+  # placeholder (~15 KB), historically caused by the app never building its real
+  # content window. Re-capture a bounded number of times — a real rendered window
+  # captures the same every time, so this only ever rescues a transient miss and
+  # never masks a genuinely blank surface (it still fails after the retries).
+  # The crash check below runs FIRST, so a real crash is reported as a crash, not
+  # retried away.
+  for try in 1 2 3; do
+    step 35 "$SWIFTPLAY" screenshot -b "$BUNDLE" -o "$out" >/dev/null 2>&1
+    bytes=$(stat -f%z "$out" 2>/dev/null || echo 0)
+    # A dead app can't be re-captured — bail out of the retry loop immediately.
+    if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then break; fi
+    [ "$bytes" -ge "$MIN_BYTES" ] && break
+    sleep 0.6
+  done
   if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
     echo "  ✗ CRASHED at: $name"; fail=$((fail+1))
   elif [ "$bytes" -ge "$MIN_BYTES" ]; then
@@ -85,6 +102,7 @@ fi
 cleanup() {
   pkill -f "RackMind.app/Contents/MacOS/RackMind" 2>/dev/null
   pkill -f "hold-display" 2>/dev/null
+  defaults delete "$BUNDLE" ApplePersistenceIgnoreState 2>/dev/null  # RAC-432: launch set it to force the content window; don't leave it on the user's prefs
   if [ "$seeded" = 1 ] && [ -f "$SUPPORT/servers.json.swiftplay-bak" ]; then
     mv -f "$SUPPORT/servers.json.swiftplay-bak" "$SUPPORT/servers.json"
   fi
@@ -100,7 +118,7 @@ echo "swiftplay headless visual sweep → $SHOTS"
 echo "------------------------------------------"
 
 # Every sidebar page (identifiers from RAC-327).
-for page in chat dashboard audit terminal knowledge alerts settings; do
+for page in chat dashboard audit securityAudit terminal knowledge alerts settings; do
   step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-$page" >/dev/null 2>&1
   sleep 0.8
   shoot "$page"

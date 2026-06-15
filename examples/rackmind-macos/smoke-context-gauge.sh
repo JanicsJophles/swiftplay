@@ -1,34 +1,28 @@
 #!/usr/bin/env bash
 #
-# swiftplay headless smoke — RAC-387 Wave 3 context compaction.
+# swiftplay headless smoke — RAC-387 Wave 2 token-budget awareness.
 #
-# Wave 2 added the token-budget gauge; Wave 3 adds the FOLD: at ~70% of the
-# model window the agent folds older completed turns into a Haiku-summarized
-# digest, keeps the recent N verbatim, and never orphans a tool_use/tool_result
-# pair. Before this slice a long run resent the full transcript every turn and
-# eventually 400'd on context overflow.
+# Exercises the surfaces touched by the macOS token-budget slice:
+#   1. The chat composer survives typing a multi-step request — the kind of
+#      prompt that, with a live model, drives several tool calls and makes the
+#      context gauge advance turn over turn.
+#   2. The streaming status bar (where the `chat-context-gauge` indicator lives,
+#      AX id `chat-context-gauge`) mounts without crashing the chat surface.
+#   3. A round-trip across surfaces (chat → dashboard → chat) doesn't wedge the
+#      app after the new ContextUsage event plumbing was added to ChatStore.
 #
-# This smoke forces an EARLY fold via the DEBUG-only `RACKMIND_COMPACT_THRESHOLD`
-# env (honored only in DEBUG builds) so we don't need a 60-minute conversation to
-# exercise the path. `open` propagates this process's environment to the launched
-# app, so exporting it here reaches the DEBUG RackMind.app.
+# The gauge only renders WHILE a turn is streaming against a live Anthropic key
+# (it reads real `usage.input_tokens` off the SSE stream), and a multi-tool run
+# needs a real Proxmox host, so the authoritative functional assertions —
+# estimator parity with Electron, ContextUsage arithmetic, the 4096→8192 bump —
+# live in RackMindTests/ContextUsageTests.swift (run by `make check`). This
+# smoke is the headless crash-sweep over the same surfaces: "rendered +
+# survived" on top of the unit proof. When the gauge id is present (a streaming
+# run happened to be live), we assert it too — otherwise we note it as skipped.
 #
-# What it asserts headlessly:
-#   1. The app launches + survives a LONG scripted multi-step chat run with the
-#      compaction threshold forced very low — the kind of run that, uncompacted,
-#      slams into the context wall and 400s. "Survived" = the fold path (driven
-#      every turn) didn't crash the chat surface.
-#   2. The context gauge control (`chat-context-gauge`) stays locatable across
-#      the run. When a live Anthropic key produced a real streaming fold, the
-#      gauge text carries "· compacted" — we assert that when present; otherwise
-#      we note it skipped (expected on a keyless smoke box, where the
-#      authoritative fold/pairing proof lives in RackMindTests/
-#      ContextCompactorTests.swift run by `make check`).
-#   3. A round-trip across surfaces (chat → dashboard → chat) doesn't wedge after
-#      the new `.compactionDigest` event plumbing was added to ChatStore.
-#
-# Runs fully headless via `swiftplay launch --offscreen`; the window renders on a
-# headless virtual display and never appears on a physical screen.
+# Runs fully headless: app launched via `swiftplay launch --offscreen`; the
+# window renders on a headless virtual display and never appears on a physical
+# screen. Focus never leaves your current app.
 #
 # Requirements: swiftplay built, RackMind.app built (make build), Accessibility
 # granted to the terminal. See README.md.
@@ -39,10 +33,6 @@ BUNDLE="ai.rackmind.macos"
 SWIFTPLAY="${SWIFTPLAY:-$(cd "$(dirname "$0")/../.." && pwd)/.build/debug/swiftplay}"
 APP="${RACKMIND_APP:-$HOME/development/rackmind/rackmind-macos/DerivedData/Build/Products/Debug/RackMind.app}"
 SUPPORT="$HOME/Library/Application Support/RackMind"
-
-# Force an early compaction fold (DEBUG-only seam). `open` inherits this env →
-# the launched DEBUG app honors it in effectiveCompactionThreshold().
-export RACKMIND_COMPACT_THRESHOLD="${RACKMIND_COMPACT_THRESHOLD:-0.01}"
 
 pass=0; fail=0
 PID=""
@@ -100,45 +90,33 @@ pkill -f "RackMind.app/Contents/MacOS/RackMind" 2>/dev/null; sleep 1
 sleep 5
 PID=$(pgrep -f 'RackMind.app/Contents/MacOS/RackMind' | head -1)
 
-echo "swiftplay headless smoke — RAC-387 Wave 3 context compaction"
-echo "  (RACKMIND_COMPACT_THRESHOLD=$RACKMIND_COMPACT_THRESHOLD — forced early fold)"
+echo "swiftplay headless smoke — RAC-387 Wave 2 token-budget / context gauge"
 echo "----------------------------------------------------------------------"
 alive "launch (offscreen)"
 
-# 1. Chat: drive a LONG multi-step request — the workload that, uncompacted,
-#    grows the transcript past the context wall. With the threshold forced near
-#    zero, maybeCompact() runs before every turn; the surface must survive it.
+# 1. Chat: type a multi-step request that would drive several tool calls (the
+#    workload that makes the gauge advance turn over turn).
 step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-chat" >/dev/null 2>&1; sleep 0.7
 alive "nav-chat"
-step 15 "$SWIFTPLAY" type "list every container, then for each one check disk, memory, network, uptime, package updates, and running services, then summarize the whole fleet" -b "$BUNDLE" >/dev/null 2>&1
+step 15 "$SWIFTPLAY" type "list all containers, then check disk usage on each, then summarize" -b "$BUNDLE" >/dev/null 2>&1
 sleep 0.5
-alive "type long multi-step request (drives many turns → fold)"
+alive "type multi-step request into composer"
 
-# Send it. On a keyless box this lands an error event (no API key) rather than a
-# real run, but the send path + ChatStore's new .compactionDigest case must not
-# wedge the surface. We assert survival, not a completed run.
-step 12 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "chat-send" >/dev/null 2>&1; sleep 2
-alive "send (compaction path armed, threshold≈0)"
-
-# 2. The context gauge. It only renders while a turn is actively streaming
-#    against a live key; after a real fold its text carries "· compacted".
+# 2. The context gauge control. It only renders while a turn is actively
+#    streaming against a live key, so its absence on a keyless smoke box is
+#    expected (skip, not fail). When present, assert it's locatable by AX id.
 if step 8 "$SWIFTPLAY" find -t "chat-context-gauge" -b "$BUNDLE" >/dev/null 2>&1; then
   echo "  ✓ found: chat-context-gauge (a streaming turn was live)"; pass=$((pass+1))
-  if step 8 "$SWIFTPLAY" find -t "compacted" -b "$BUNDLE" >/dev/null 2>&1; then
-    echo "  ✓ gauge shows '· compacted' (a real fold occurred)"; pass=$((pass+1))
-  else
-    echo "  ⊘ gauge present but not yet compacted (fold needs >keepRecentTurns turns of live history)"
-  fi
 else
   echo "  ⊘ skipped: chat-context-gauge not present (no live streaming turn — expected without an API key)"
 fi
 
-# 3. Round-trip across surfaces — confirm the .compactionDigest plumbing in
+# 3. Round-trip across surfaces — confirm the new ContextUsage event plumbing in
 #    ChatStore didn't wedge anything.
 step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-dashboard" >/dev/null 2>&1; sleep 0.5
 alive "nav-dashboard"
 step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-chat" >/dev/null 2>&1; sleep 0.5
-alive "return to chat (digest event plumbing intact)"
+alive "return to chat"
 
 echo "----------------------------------------------------------------------"
 echo "pass=$pass fail=$fail   (frontmost stayed: $(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null))"

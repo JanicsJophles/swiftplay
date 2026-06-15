@@ -76,6 +76,7 @@ fi
 cleanup() {
   pkill -f "RackMind.app/Contents/MacOS/RackMind" 2>/dev/null
   pkill -f "hold-display" 2>/dev/null
+  defaults delete "$BUNDLE" ApplePersistenceIgnoreState 2>/dev/null  # RAC-432: launch set it to force the content window; don't leave it on the user's prefs
   if [ "$seeded" = 1 ] && [ -f "$SUPPORT/servers.json.swiftplay-bak" ]; then
     mv -f "$SUPPORT/servers.json.swiftplay-bak" "$SUPPORT/servers.json"
   fi

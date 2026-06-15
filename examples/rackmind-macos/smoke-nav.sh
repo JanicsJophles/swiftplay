@@ -70,6 +70,7 @@ fi
 cleanup() {
   pkill -f "RackMind.app/Contents/MacOS/RackMind" 2>/dev/null
   pkill -f "hold-display" 2>/dev/null
+  defaults delete "$BUNDLE" ApplePersistenceIgnoreState 2>/dev/null  # RAC-432: launch set it to force the content window; don't leave it on the user's prefs
   if [ "$seeded" = 1 ] && [ -f "$SUPPORT/servers.json.swiftplay-bak" ]; then
     mv -f "$SUPPORT/servers.json.swiftplay-bak" "$SUPPORT/servers.json"
   fi
@@ -86,7 +87,7 @@ echo "------------------------------"
 alive "launch (hidden)"
 
 # Every sidebar page (identifiers from RAC-327).
-for page in chat dashboard audit terminal knowledge alerts settings; do
+for page in chat dashboard audit securityAudit terminal knowledge alerts settings; do
   step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-$page" >/dev/null 2>&1
   sleep 0.7
   alive "nav-$page"
