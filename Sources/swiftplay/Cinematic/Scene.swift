@@ -133,6 +133,136 @@ struct Look: Decodable {
     /// it resists overshoot (critical damping ≈ 2·√stiffness).
     var spring: SpringSpec = SpringSpec()
 
+    // MARK: Creative layers (the "ad", not just the screen)
+
+    /// Cold-open title card: a headline held on a dark scrim that dissolves to
+    /// reveal the app. nil = jump straight into the footage.
+    var intro: IntroSpec?
+    /// Brand end card: the app fades to a wordmark + tagline over an accent glow.
+    var outro: OutroSpec?
+    /// Emerald brand glow radiating from behind the panel. Adds depth + warmth
+    /// the whole runtime. nil/0 intensity = off.
+    var glow: GlowSpec = GlowSpec()
+    /// Darkened corners that focus the eye on the panel. 0 = off.
+    var vignette: Double = 0.18
+
+    /// Time compression segments: fast-forward dead stretches (e.g. a 15s log
+    /// stream) so they fly by in a high-speed blur instead of killing momentum.
+    /// Each segment speeds source time `[from,to]` by `speed`×; frames that would
+    /// crowd the output cadence are dropped and a vertical speed-blur is applied.
+    var timeWarp: [WarpSpec] = []
+
+    /// When the camera's intended viewport would crop the source's left edge by
+    /// less than this fraction of source width, snap the crop to 0 instead — so a
+    /// small drift/zoom never bisects the left chrome (the sidebar wordmark).
+    /// 0 = off.
+    var leftAnchorBias: Double = 0
+
+    /// Manual timed camera focuses, in addition to the ones derived from clicks.
+    /// Lets a scene zoom into a region (normalized 0–1 rect of the source) at a
+    /// given time for a held beat — e.g. to linger on the deploy plan card. `zoom`
+    /// 0 = auto-fit the region.
+    var focus: [FocusSpec] = []
+
+    struct FocusSpec: Decodable {
+        var at: Double = 0
+        var hold: Double = 2.0
+        var x: Double = 0
+        var y: Double = 0
+        var w: Double = 1
+        var h: Double = 1
+        var zoom: Double = 0
+        init() {}
+        private enum K: String, CodingKey { case at, hold, x, y, w, h, zoom }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            let d = FocusSpec()
+            at = try c.decodeIfPresent(Double.self, forKey: .at) ?? d.at
+            hold = try c.decodeIfPresent(Double.self, forKey: .hold) ?? d.hold
+            x = try c.decodeIfPresent(Double.self, forKey: .x) ?? d.x
+            y = try c.decodeIfPresent(Double.self, forKey: .y) ?? d.y
+            w = try c.decodeIfPresent(Double.self, forKey: .w) ?? d.w
+            h = try c.decodeIfPresent(Double.self, forKey: .h) ?? d.h
+            zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? d.zoom
+        }
+    }
+
+    struct WarpSpec: Decodable {
+        var from: Double = 0
+        var to: Double = 0
+        var speed: Double = 1
+        /// Vertical motion-blur radius (source px) applied while inside the
+        /// segment, to streak the fast-scrolling content. 0 = no blur.
+        var blur: Double = 10
+        init() {}
+        private enum K: String, CodingKey { case from, to, speed, blur }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            let d = WarpSpec()
+            from = try c.decodeIfPresent(Double.self, forKey: .from) ?? d.from
+            to = try c.decodeIfPresent(Double.self, forKey: .to) ?? d.to
+            speed = max(1, try c.decodeIfPresent(Double.self, forKey: .speed) ?? d.speed)
+            blur = try c.decodeIfPresent(Double.self, forKey: .blur) ?? d.blur
+        }
+    }
+
+    struct IntroSpec: Decodable {
+        var headline: String = ""
+        var sub: String?
+        /// Seconds the title holds full-opacity on the scrim before the reveal.
+        var hold: Double = 1.3
+        /// Seconds the scrim takes to dissolve away after the hold (the reveal).
+        var settle: Double = 0.8
+        /// Accent color for the kerned eyebrow / underline, hex.
+        var accent: String = "#10B981"
+        init() {}
+        private enum K: String, CodingKey { case headline, sub, hold, settle, accent }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            let d = IntroSpec()
+            headline = try c.decodeIfPresent(String.self, forKey: .headline) ?? d.headline
+            sub = try c.decodeIfPresent(String.self, forKey: .sub)
+            hold = try c.decodeIfPresent(Double.self, forKey: .hold) ?? d.hold
+            settle = try c.decodeIfPresent(Double.self, forKey: .settle) ?? d.settle
+            accent = try c.decodeIfPresent(String.self, forKey: .accent) ?? d.accent
+        }
+    }
+
+    struct OutroSpec: Decodable {
+        var wordmark: String = "RackMind"
+        var tagline: String?
+        /// A call-to-action shown in an accent pill at the bottom (e.g. a URL).
+        var cta: String?
+        /// Seconds before the end of the clip at which the end card begins.
+        var fromEnd: Double = 2.0
+        var accent: String = "#10B981"
+        init() {}
+        private enum K: String, CodingKey { case wordmark, tagline, cta, fromEnd, accent }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            let d = OutroSpec()
+            wordmark = try c.decodeIfPresent(String.self, forKey: .wordmark) ?? d.wordmark
+            tagline = try c.decodeIfPresent(String.self, forKey: .tagline)
+            cta = try c.decodeIfPresent(String.self, forKey: .cta)
+            fromEnd = try c.decodeIfPresent(Double.self, forKey: .fromEnd) ?? d.fromEnd
+            accent = try c.decodeIfPresent(String.self, forKey: .accent) ?? d.accent
+        }
+    }
+
+    struct GlowSpec: Decodable {
+        /// 0 = off, 1 = strong. A soft emerald radial behind the panel.
+        var intensity: Double = 0.35
+        var color: String = "#10B981"
+        init() {}
+        private enum K: String, CodingKey { case intensity, color }
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: K.self)
+            let d = GlowSpec()
+            intensity = try c.decodeIfPresent(Double.self, forKey: .intensity) ?? d.intensity
+            color = try c.decodeIfPresent(String.self, forKey: .color) ?? d.color
+        }
+    }
+
     struct TiltSpec: Decodable {
         var y: Double = -8
         var x: Double = 4
@@ -170,6 +300,8 @@ struct Look: Decodable {
         case width, height, fps, background, padding, cornerRadius
         case zoom, zoomIn, zoomHold, zoomOut, cursor, captions
         case tilt, perspective, spring
+        case intro, outro, glow, vignette
+        case timeWarp, leftAnchorBias, focus
     }
 
     init() {}
@@ -192,5 +324,12 @@ struct Look: Decodable {
         tilt = try c.decodeIfPresent(TiltSpec.self, forKey: .tilt) ?? d.tilt
         perspective = try c.decodeIfPresent(Double.self, forKey: .perspective) ?? d.perspective
         spring = try c.decodeIfPresent(SpringSpec.self, forKey: .spring) ?? d.spring
+        intro = try c.decodeIfPresent(IntroSpec.self, forKey: .intro)
+        outro = try c.decodeIfPresent(OutroSpec.self, forKey: .outro)
+        glow = try c.decodeIfPresent(GlowSpec.self, forKey: .glow) ?? d.glow
+        vignette = try c.decodeIfPresent(Double.self, forKey: .vignette) ?? d.vignette
+        timeWarp = try c.decodeIfPresent([WarpSpec].self, forKey: .timeWarp) ?? d.timeWarp
+        leftAnchorBias = try c.decodeIfPresent(Double.self, forKey: .leftAnchorBias) ?? d.leftAnchorBias
+        focus = try c.decodeIfPresent([FocusSpec].self, forKey: .focus) ?? d.focus
     }
 }

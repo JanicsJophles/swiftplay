@@ -45,6 +45,7 @@ enum CinematicRenderer {
 
         // MARK: Reader
         let asset = AVURLAsset(url: movURL)
+        let duration = max(0.5, CMTimeGetSeconds(asset.duration))
         guard let track = asset.tracks(withMediaType: .video).first else { throw RenderError.noVideoTrack }
         let reader: AVAssetReader
         do { reader = try AVAssetReader(asset: asset) } catch { throw RenderError.reader(error.localizedDescription) }
@@ -94,8 +95,14 @@ enum CinematicRenderer {
         let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
         let textCache = TextCache()
 
+        // Time compression: fast-forward dead stretches. `lastWrittenOut` lets the
+        // loop drop frames that would crowd the output cadence inside a segment.
+        let warp = TimeWarp(look.timeWarp)
+        var lastWrittenOut = -1.0
+
         var firstPTS: CMTime?
         var frameCount = 0
+        var writtenCount = 0
 
         while reader.status == .reading, let sample = readerOutput.copyNextSampleBuffer() {
             // Drain Core Image / Core Graphics temporaries every frame. The
@@ -105,14 +112,16 @@ enum CinematicRenderer {
             // because nothing returns to the run loop in this tight read/write
             // loop. This is the single thing that keeps the renderer flat in RAM.
             try autoreleasepool {
-                try renderOneFrame(
+                let wrote = try renderOneFrame(
                     sample: sample, firstPTS: &firstPTS, reader: reader,
                     writer: writer, writerInput: writerInput, adaptor: adaptor,
                     W: W, H: H, meta: meta, layout: layout, bg: bg,
                     camera: camera, cursor: cursor, overlays: overlays, look: look,
                     textCache: textCache, ciContext: ciContext, colorSpace: colorSpace,
-                    frameCount: frameCount, progress: progress
+                    frameCount: frameCount, duration: duration,
+                    warp: warp, lastWrittenOut: &lastWrittenOut, progress: progress
                 )
+                if wrote { writtenCount += 1 }
             }
             frameCount += 1
         }
@@ -125,7 +134,11 @@ enum CinematicRenderer {
         if writer.status == .failed {
             throw RenderError.writer(writer.error?.localizedDescription ?? "finishWriting() failed")
         }
-        progress("\(frameCount) frames")
+        if warp.isActive {
+            progress("\(writtenCount)/\(frameCount) frames (time-compressed)")
+        } else {
+            progress("\(frameCount) frames")
+        }
     }
 
     /// One frame of the read → composite → write pipeline, factored out so the
@@ -137,16 +150,26 @@ enum CinematicRenderer {
         W: Int, H: Int, meta: Timeline.Meta, layout: FrameLayout, bg: Gradient,
         camera: CameraTrack, cursor: CursorTrack, overlays: OverlayTrack, look: Look,
         textCache: TextCache, ciContext: CIContext, colorSpace: CGColorSpace,
-        frameCount: Int, progress: (String) -> Void
-    ) throws {
-        guard let srcBuffer = CMSampleBufferGetImageBuffer(sample) else { return }
+        frameCount: Int, duration: Double,
+        warp: TimeWarp, lastWrittenOut: inout Double, progress: (String) -> Void
+    ) throws -> Bool {
+        guard let srcBuffer = CMSampleBufferGetImageBuffer(sample) else { return false }
         let pts = CMSampleBufferGetPresentationTimeStamp(sample)
         if firstPTS == nil { firstPTS = pts }
-        let outPTS = CMTimeSubtract(pts, firstPTS!)
-        let t = max(0, CMTimeGetSeconds(outPTS))
+        let t = max(0, CMTimeGetSeconds(CMTimeSubtract(pts, firstPTS!)))   // source time
+
+        // Time warp: where does this source frame land in the final cut, and is it
+        // inside a compressed segment? Drop frames that would crowd the output
+        // cadence (that's what turns 18s of logs into a ~2s scrub).
+        let outT = warp.output(forSource: t)
+        let warpSeg = warp.segment(atSource: t)
+        if lastWrittenOut >= 0, outT - lastWrittenOut < 0.75 / Double(max(1, look.fps)) {
+            return false   // skip — too close to the last written frame
+        }
+        let outPTS = CMTime(seconds: outT, preferredTimescale: 600)
 
         let srcCG = ciContext.createCGImage(CIImage(cvPixelBuffer: srcBuffer), from: CGRect(x: 0, y: 0, width: meta.sourceWidth, height: meta.sourceHeight))
-        guard let srcCG else { return }
+        guard let srcCG else { return false }
 
         // Output pixel buffer + a top-left-origin CG context over it. The pool
         // can be briefly nil right after startSession — wait for it rather than
@@ -181,7 +204,8 @@ enum CinematicRenderer {
             ctx: ctx, srcCG: srcCG, t: t, layout: layout, bg: bg,
             camera: camera, cursor: cursor, overlays: overlays,
             look: look, canvas: CGSize(width: W, height: H),
-            textCache: textCache, ciContext: ciContext
+            textCache: textCache, ciContext: ciContext, duration: duration,
+            warpBlur: warpSeg?.blur ?? 0
         )
 
         CVPixelBufferUnlockBaseAddress(pb, [])
@@ -194,8 +218,10 @@ enum CinematicRenderer {
             throw RenderError.writer(writer.error?.localizedDescription ?? "writer failed mid-render")
         }
         adaptor.append(pb, withPresentationTime: outPTS)
+        lastWrittenOut = outT
 
-        if frameCount % 120 == 0 { progress("frame \(frameCount) · \(String(format: "%.1fs", t))") }
+        if frameCount % 120 == 0 { progress("frame \(frameCount) · src \(String(format: "%.1fs", t)) → out \(String(format: "%.1fs", outT))") }
+        return true
     }
 
     // MARK: - Per-frame compositing
@@ -204,7 +230,8 @@ enum CinematicRenderer {
         ctx: CGContext, srcCG: CGImage, t: Double,
         layout: FrameLayout, bg: Gradient,
         camera: CameraTrack, cursor: CursorTrack, overlays: OverlayTrack,
-        look: Look, canvas: CGSize, textCache: TextCache, ciContext: CIContext
+        look: Look, canvas: CGSize, textCache: TextCache, ciContext: CIContext,
+        duration: Double, warpBlur: Double = 0
     ) {
         // All layout is computed in top-left (y-down) coords; the context is CG's
         // native bottom-left (y-up). Convert rects/points at the moment of drawing
@@ -215,6 +242,9 @@ enum CinematicRenderer {
 
         // Background gradient.
         bg.draw(in: ctx, size: canvas)
+
+        // Emerald brand bloom behind where the panel sits (top-left screenRect).
+        CreativeLayer.drawGlow(ctx: ctx, canvas: canvas, panelRect: layout.screenRect, spec: look.glow, t: t)
 
         // Camera → where the source maps onto the canvas this frame.
         let cam = camera.eval(at: t)
@@ -228,7 +258,10 @@ enum CinematicRenderer {
         // image onto it and routes overlays through `quad.map`. When the tilt is
         // identity the quad *is* the rect and we take the original 2D path.
         let tilt = look.tiltValue
+        // Project, then fit the tilted quad inside the canvas safe area so the
+        // perspective-widened near edge never clips against the output bounds.
         let quad = Projector.project(rect: layout.screenRect, tilt: tilt)
+            .fitted(inCanvas: canvas, padding: look.padding)
         let tilted = !tilt.isIdentity
 
         // Motion blur during fast camera moves — the single biggest "commercial"
@@ -254,6 +287,17 @@ enum CinematicRenderer {
                     .cropped(to: ci.extent)
                 if let cg = ciContext.createCGImage(blurred, from: ci.extent) { windowImage = cg }
             }
+        }
+
+        // Time-warp speed-blur: while inside a compressed segment the content is
+        // scrubbing past 8× faster than capture, so streak it vertically to sell
+        // the high-speed scroll (camera motion-blur above is content-agnostic).
+        if warpBlur > 0.5 {
+            let ci = CIImage(cgImage: windowImage)
+            let blurred = ci
+                .applyingFilter("CIMotionBlur", parameters: [kCIInputRadiusKey: warpBlur, kCIInputAngleKey: Double.pi / 2])
+                .cropped(to: ci.extent)
+            if let cg = ciContext.createCGImage(blurred, from: ci.extent) { windowImage = cg }
         }
 
         if tilted {
@@ -306,24 +350,45 @@ enum CinematicRenderer {
                 let p = surfacePoint(ripple.point)
                 drawRipple(ctx: ctx, at: p, progress: ripple.progress, scale: layout.uiScale)
             }
-            if let cp = cursor.eval(at: t) {
-                let p = surfacePoint(cp)
-                drawCursor(ctx: ctx, tip: p, scale: layout.uiScale)
+            if let cs = cursor.state(at: t), cs.alpha > 0.01 {
+                let p = surfacePoint(cs.point)
+                drawCursor(ctx: ctx, tip: p, scale: layout.uiScale, alpha: cs.alpha)
             }
         }
 
+        // Vignette: darken the corners to pull focus to the panel. Sits above the
+        // panel + cursor but below text so captions stay crisp.
+        CreativeLayer.drawVignette(ctx: ctx, canvas: canvas, intensity: look.vignette)
+
+        // Is the intro title card still covering the app this frame? If so, the
+        // step caption underneath it is suppressed (the headline carries it).
+        let introCovering = look.intro.map { CreativeLayer.introActive(spec: $0, t: t) } ?? false
+
         // Captions and key pills live in the letterbox margins (below / above the
         // window) so they never cover the UI — cleaner than a lower-third overlay.
-        if look.captions {
+        if look.captions, !introCovering {
             let frame = layout.screenRect                                  // top-left
             let captionCY = H - (frame.maxY + canvas.height) / 2           // bottom margin → bl
             let keyCY = H - frame.minY / 2                                 // top margin → bl
-            if let caption = overlays.caption(at: t) {
-                drawCaption(ctx: ctx, text: caption, canvas: canvas, centerY: captionCY, scale: layout.uiScale, textCache: textCache)
+            if let cap = overlays.captionState(at: t) {
+                // Fade + rise in over 0.3s, fade out over the last 0.3s.
+                let fadeIn = CreativeLayer.smoothstep(0, 0.3, cap.age)
+                let fadeOut = CreativeLayer.smoothstep(0, 0.3, cap.remaining)
+                let a = min(fadeIn, fadeOut)
+                let rise = CGFloat((1 - fadeIn)) * 14 * layout.uiScale     // starts low, settles up
+                drawCaption(ctx: ctx, text: cap.text, canvas: canvas, centerY: captionCY, scale: layout.uiScale, textCache: textCache, alpha: a, rise: -rise)
             }
             if let key = overlays.keyPill(at: t) {
                 drawKeyPill(ctx: ctx, text: key, canvas: canvas, centerY: keyCY, scale: layout.uiScale, textCache: textCache)
             }
+        }
+
+        // Creative bookends, drawn on top of everything.
+        if let intro = look.intro, CreativeLayer.introActive(spec: intro, t: t) {
+            CreativeLayer.drawIntro(ctx: ctx, canvas: canvas, spec: intro, t: t, scale: layout.uiScale, textCache: textCache)
+        }
+        if let outro = look.outro, CreativeLayer.outroActive(spec: outro, t: t, duration: duration) {
+            CreativeLayer.drawOutro(ctx: ctx, canvas: canvas, spec: outro, t: t, duration: duration, scale: layout.uiScale, textCache: textCache)
         }
     }
 
@@ -445,10 +510,10 @@ enum CinematicRenderer {
 
     // MARK: - Cursor / ripple / captions
 
-    private static func drawCursor(ctx: CGContext, tip: CGPoint, scale: CGFloat) {
+    private static func drawCursor(ctx: CGContext, tip: CGPoint, scale: CGFloat, alpha: Double = 1) {
         // Classic macOS arrow, tip at the origin. Shape is authored y-down (the
         // arrow hangs below the tip); the context is bottom-left, so down is -y.
-        let s = 1.7 * scale
+        let s = 1.9 * scale
         let pts: [CGPoint] = [
             (0, 0), (0, 16), (3.7, 12.3), (6.4, 18.6),
             (8.9, 17.4), (6.2, 11.2), (11, 11),
@@ -459,16 +524,17 @@ enum CinematicRenderer {
         path.closeSubpath()
 
         ctx.saveGState()
+        ctx.setAlpha(CGFloat(alpha))
         ctx.setShadow(offset: CGSize(width: 0, height: -1 * scale), blur: 3 * scale, color: NSColor.black.withAlphaComponent(0.5).cgColor)
         ctx.addPath(path)
         ctx.setFillColor(NSColor.white.cgColor)
         ctx.fillPath()
-        ctx.restoreGState()
 
         ctx.addPath(path)
         ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.85).cgColor)
         ctx.setLineWidth(1.2 * scale)
         ctx.strokePath()
+        ctx.restoreGState()
     }
 
     private static func drawRipple(ctx: CGContext, at p: CGPoint, progress: Double, scale: CGFloat) {
@@ -487,23 +553,25 @@ enum CinematicRenderer {
         ctx.restoreGState()
     }
 
-    private static func drawCaption(ctx: CGContext, text: String, canvas: CGSize, centerY: CGFloat, scale: CGFloat, textCache: TextCache) {
+    private static func drawCaption(ctx: CGContext, text: String, canvas: CGSize, centerY: CGFloat, scale: CGFloat, textCache: TextCache, alpha: Double = 1, rise: CGFloat = 0) {
+        guard alpha > 0.001 else { return }
         let fontSize = 26 * scale
         guard let img = textCache.image(text, fontSize: fontSize, weight: .semibold, color: .white) else { return }
         let tw = CGFloat(img.width), th = CGFloat(img.height)
         let padX = 28 * scale, padY = 14 * scale
         let pillW = tw + padX * 2, pillH = th + padY * 2
         let x = (canvas.width - pillW) / 2
-        let y = centerY - pillH / 2                      // centered in the bottom margin
+        let y = centerY - pillH / 2 + rise               // centered in the bottom margin (+ rise-in offset)
         let pill = CGRect(x: x, y: y, width: pillW, height: pillH)
         let r = pillH / 2
         ctx.saveGState()
+        ctx.setAlpha(CGFloat(alpha))
         ctx.setShadow(offset: CGSize(width: 0, height: -2 * scale), blur: 16 * scale, color: NSColor.black.withAlphaComponent(0.4).cgColor)
         ctx.addPath(CGPath(roundedRect: pill, cornerWidth: r, cornerHeight: r, transform: nil))
         ctx.setFillColor(NSColor.black.withAlphaComponent(0.62).cgColor)
         ctx.fillPath()
-        ctx.restoreGState()
         ctx.draw(img, in: CGRect(x: x + padX, y: y + padY, width: tw, height: th))
+        ctx.restoreGState()
     }
 
     private static func drawKeyPill(ctx: CGContext, text: String, canvas: CGSize, centerY: CGFloat, scale: CGFloat, textCache: TextCache) {

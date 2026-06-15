@@ -24,6 +24,11 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 "CVirtualDisplay",
                 "SwiftplayCore",
+            ],
+            resources: [
+                // Brand typeface (Geist) bundled so rendered captions/titles match
+                // the website. Registered at runtime by FontLoader.
+                .copy("Resources/fonts"),
             ]
         ),
         // Menu-bar "control center" — edits the same config the CLI reads.

@@ -77,6 +77,46 @@ struct Quad {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
+    /// Returns a copy of this quad uniformly scaled (and re-centered) so its
+    /// bounding box fits within the canvas inset by `padding · min(side)`. The
+    /// perspective projection widens the near edge of a tilted panel past the
+    /// original `screenRect`; without this, those corners fall outside the W×H
+    /// output and the app's edge is visibly clipped on the wide/zoomed-out beats.
+    ///
+    /// We scale about the bounding-box center and then translate so the box sits
+    /// inside the safe area, keeping the panel optically centered. `srcRect` is
+    /// preserved so `map()` (cursor/ripples) and the renderer's
+    /// CIPerspectiveTransform stay consistent — they read the same four corners.
+    func fitted(inCanvas canvas: CGSize, padding: Double) -> Quad {
+        let inset = CGFloat(padding) * min(canvas.width, canvas.height)
+        let safe = CGRect(x: inset, y: inset, width: canvas.width - 2 * inset, height: canvas.height - 2 * inset)
+        let box = boundingBox
+        guard box.width > 0, box.height > 0, safe.width > 0, safe.height > 0 else { return self }
+
+        let scale = min(1, min(safe.width / box.width, safe.height / box.height))
+        let bcx = box.midX, bcy = box.midY
+
+        func adjust(_ p: CGPoint) -> CGPoint {
+            CGPoint(x: bcx + (p.x - bcx) * scale, y: bcy + (p.y - bcy) * scale)
+        }
+        var tl = adjust(topLeft), tr = adjust(topRight)
+        var br = adjust(bottomRight), bl = adjust(bottomLeft)
+
+        // Re-clamp the (now smaller) box back inside the safe area in case the
+        // tilt pushed its center off toward one side.
+        let nxs = [tl.x, tr.x, br.x, bl.x], nys = [tl.y, tr.y, br.y, bl.y]
+        var dx: CGFloat = 0, dy: CGFloat = 0
+        if nxs.min()! < safe.minX { dx = safe.minX - nxs.min()! }
+        if nxs.max()! + dx > safe.maxX { dx -= (nxs.max()! + dx) - safe.maxX }
+        if nys.min()! < safe.minY { dy = safe.minY - nys.min()! }
+        if nys.max()! + dy > safe.maxY { dy -= (nys.max()! + dy) - safe.maxY }
+        if dx != 0 || dy != 0 {
+            let shift = { (p: CGPoint) in CGPoint(x: p.x + dx, y: p.y + dy) }
+            tl = shift(tl); tr = shift(tr); br = shift(br); bl = shift(bl)
+        }
+        return Quad(srcRect: srcRect, topLeft: tl, topRight: tr, bottomRight: br, bottomLeft: bl)
+    }
+
     /// Map a canvas point that lies inside `srcRect` (the flat panel) to its
     /// projected position on the tilted quad. We normalize the point to (u,v) in
     /// the source rect, then do a **perspective-correct** bilinear map across the

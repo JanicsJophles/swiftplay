@@ -25,6 +25,9 @@ struct RenderCommand: ParsableCommand {
     @Option(name: [.long, .customShort("o")], help: "Output .mp4 path. Defaults to <footage-base>.mp4.")
     var output: String?
 
+    @Option(name: .long, help: "Path to the originating .scene.json. Sources the full look (intro/outro/glow/tilt/zoom) as the render base; CLI flags below still override it.")
+    var scene: String?
+
     @Option(name: .long, help: "Override peak zoom factor (1 = no zoom).")
     var zoom: Double?
 
@@ -72,9 +75,18 @@ struct RenderCommand: ParsableCommand {
             throw ExitCode(1)
         }
 
-        // Look defaults come from the timeline's capture meta (fps + source size);
-        // the rest are renderer defaults overridable by flags.
+        // Look base: the originating scene's look if supplied (so intro/outro/
+        // glow/tilt/zoom all flow into a standalone re-render of existing
+        // footage), else renderer defaults. CLI flags below override either.
         var look = Look()
+        if let scene {
+            do {
+                look = try Scene.load(from: URL(fileURLWithPath: scene)).look
+            } catch {
+                err("Could not read scene \(scene): \(error.localizedDescription)")
+                throw ExitCode(1)
+            }
+        }
         look.fps = tl.meta.fps
         if let zoom { look.zoom = zoom }
         if let background { look.background = background }

@@ -39,14 +39,51 @@ struct UnitBezier {
     }
 }
 
-/// Camera: snappy ease-in-out — accelerates hard out of the hold, glides into the
-/// next focus. This is the "whoosh".
-let cameraEase = UnitBezier(0.72, 0.0, 0.18, 1.0)
+/// Camera: a hyper-stylized exponential ease-out — `cubic-bezier(0.16,1,0.3,1)`,
+/// the curve premium product videos use. Covers ~80% of the move in the first
+/// ~20% of the time, then glides to a halt. Feeding this as the spring's target
+/// (below) makes focus changes explode out of the gate and settle smoothly.
+let cameraEase = UnitBezier(0.16, 1.0, 0.3, 1.0)
 /// Cursor: ease-out — leaves fast, decelerates smoothly onto the target, the way a
 /// hand moves a mouse.
 let cursorEase = UnitBezier(0.22, 1.0, 0.30, 1.0)
 
 private func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double { a + (b - a) * t }
+
+// MARK: - Time warp (fast-forward dead stretches)
+
+/// Maps source time → output time by compressing configured segments. A 15s log
+/// stream becomes ~2s: source time flies through the segment while output time
+/// barely advances, so the renderer drops the crowded frames and what remains
+/// reads as a high-speed scrub. Time outside any segment maps 1:1 (shifted by the
+/// accumulated savings of earlier segments), so everything after a compressed
+/// stretch slides earlier in the final cut.
+struct TimeWarp {
+    private let segments: [Look.WarpSpec]
+    let isActive: Bool
+
+    init(_ segments: [Look.WarpSpec]) {
+        // Keep only real compressions, sorted, non-overlapping by construction.
+        self.segments = segments.filter { $0.to > $0.from && $0.speed > 1 }.sorted { $0.from < $1.from }
+        self.isActive = !self.segments.isEmpty
+    }
+
+    /// Output (final-cut) time for a given source time.
+    func output(forSource ts: Double) -> Double {
+        var saved = 0.0
+        for seg in segments {
+            if ts <= seg.from { break }
+            let span = min(ts, seg.to) - seg.from
+            saved += span * (1 - 1 / seg.speed)
+        }
+        return ts - saved
+    }
+
+    /// The segment containing `ts`, if any (for the speed-blur + frame-drop).
+    func segment(atSource ts: Double) -> Look.WarpSpec? {
+        segments.first { ts >= $0.from && ts <= $0.to }
+    }
+}
 
 // MARK: - Frame layout (canvas ↔ source geometry)
 
@@ -59,11 +96,14 @@ struct FrameLayout {
     let baseScale: CGFloat
     /// Scales canvas-relative UI (cursor, pills) so they look the same at any res.
     let uiScale: CGFloat
+    /// See `Look.leftAnchorBias`. In source-px.
+    let leftAnchor: CGFloat
 
     init(canvas: CGSize, source: CGSize, look: Look) {
         self.canvas = canvas
         self.source = source
         self.uiScale = min(canvas.width, canvas.height) / 1080
+        self.leftAnchor = CGFloat(look.leftAnchorBias) * source.width
 
         let pad = CGFloat(look.padding) * min(canvas.width, canvas.height)
         let avail = CGRect(x: pad, y: pad, width: canvas.width - 2 * pad, height: canvas.height - 2 * pad)
@@ -91,6 +131,10 @@ struct FrameLayout {
         var vy = center.y - vh / 2
         vx = min(max(0, vx), max(0, source.width - vw))
         vy = min(max(0, vy), max(0, source.height - vh))
+        // Don't bisect the left chrome: if the crop only shaves a sliver off the
+        // left (less than the sidebar's worth), anchor it to 0 so the wordmark is
+        // shown whole rather than clipped to "ckMind".
+        if leftAnchor > 0, vx > 0, vx < leftAnchor { vx = 0 }
         let s = baseScale * z
         let drawRect = CGRect(
             x: screenRect.minX - vx * s,
@@ -136,9 +180,21 @@ struct CameraTrack {
         self.sourceSize = CGSize(width: Double(timeline.meta.sourceWidth), height: Double(timeline.meta.sourceHeight))
         let meta = timeline.meta
         let defCenter = CGPoint(x: Double(meta.sourceWidth) / 2, y: Double(meta.sourceHeight) / 2)
-        let focus = timeline.events
+        let srcW = Double(meta.sourceWidth), srcH = Double(meta.sourceHeight)
+
+        // A unified, time-sorted list of camera targets: the clicks from the
+        // timeline plus any manual `focus` beats the scene declares (with explicit
+        // region / zoom / hold). Manual beats let a scene linger on something that
+        // wasn't clicked — e.g. the deploy plan card.
+        struct FItem { let t: Double; let rect: CGRect; let zoom: Double?; let hold: Double? }
+        var items: [FItem] = timeline.events
             .filter { $0.rect != nil }
-            .sorted { $0.t < $1.t }
+            .compactMap { ev in ev.rect.map { FItem(t: ev.t, rect: meta.toSource(rect: $0.cg), zoom: nil, hold: nil) } }
+        for f in look.focus {
+            let rect = CGRect(x: f.x * srcW, y: f.y * srcH, width: f.w * srcW, height: f.h * srcH)
+            items.append(FItem(t: f.at, rect: rect, zoom: f.zoom > 0 ? f.zoom : nil, hold: f.hold))
+        }
+        items.sort { $0.t < $1.t }
 
         var kfs: [KF] = [KF(t: 0, center: defCenter, zoom: 1)]
         var lastT = 0.0
@@ -155,11 +211,19 @@ struct CameraTrack {
             return min(look.zoom, max(1.25, z))
         }
 
-        for ev in focus {
-            guard let rectPts = ev.rect?.cg else { continue }
-            let r = meta.toSource(rect: rectPts)
-            let c = CGPoint(x: r.midX, y: r.midY)
-            let z = zoomFor(r)
+        for ev in items {
+            let r = ev.rect
+            // A click on a small element in the left sidebar = a navigation. Rather
+            // than zoom into the tiny button, pull WIDE to reveal the page it opens
+            // (the dashboard / knowledge base) — the cursor (drawn separately) still
+            // shows the click in the context of the whole app. Manual focus beats
+            // (which carry an explicit zoom) are never treated as nav reveals.
+            let isNavReveal = ev.zoom == nil && r.midX < srcW * 0.28 && r.height < srcH * 0.14
+            let c = isNavReveal ? defCenter : CGPoint(x: r.midX, y: r.midY)
+            let z = ev.zoom ?? (isNavReveal ? 1.0 : zoomFor(r))
+            // Reveal pages (and manual beats) get a longer hold so the viewer can
+            // actually read them.
+            let hold = ev.hold ?? (isNavReveal ? max(look.zoomHold, 2.6) : look.zoomHold)
 
             let inStart = ev.t - look.zoomIn
             if inStart > lastT + (look.zoomOut + 0.4) {
@@ -178,7 +242,7 @@ struct CameraTrack {
             kfs.append(KF(t: arrive, center: c, zoom: z))
             lastT = arrive; lastCenter = c; lastZoom = z
 
-            let holdEnd = lastT + look.zoomHold
+            let holdEnd = lastT + hold
             kfs.append(KF(t: holdEnd, center: c, zoom: z))
             lastT = holdEnd
         }
@@ -311,55 +375,73 @@ struct CameraTrack {
 
 // MARK: - Cursor track
 
-/// Synthetic cursor path. Glides between consecutive interaction points, arriving
-/// just before each action so the click reads as deliberate.
+/// Synthetic cursor. Real cursors don't drift slowly across the screen — they sit
+/// still, then dart to the next target right before a click. So the cursor *holds*
+/// at each point and only travels in a short window (`travel`) just before the
+/// next action, with a quick ease-out and a faint arc. It also fades out when it's
+/// been idle a while (e.g. during the deploy) and fades back in just before it
+/// moves, so it's never a lonely arrow sitting in dead space.
 struct CursorTrack {
-    private struct KF { let t: Double; let p: CGPoint }
-    private let kfs: [KF]
+    private struct Stop { let t: Double; let p: CGPoint }
+    private let stops: [Stop]
+    private let travel = 0.45        // seconds of motion before each action
+    private let idleHide = 1.6       // hold longer than this → fade the cursor out
+
+    struct State { let point: CGPoint; let alpha: Double }
 
     init(timeline: Timeline) {
         let meta = timeline.meta
         let pointed = timeline.events
             .filter { $0.point != nil }
             .sorted { $0.t < $1.t }
-
-        var kfs: [KF] = []
-        if let firstPt = pointed.first?.point?.cg {
-            kfs.append(KF(t: 0, p: meta.toSource(point: firstPt)))
-        }
-        var lastT = 0.0
+        var stops: [Stop] = []
         for ev in pointed {
             guard let p = ev.point?.cg else { continue }
-            let sp = meta.toSource(point: p)
-            let arrival = max(ev.t - 0.08, lastT + 0.001)
-            kfs.append(KF(t: arrival, p: sp))
-            let settle = max(ev.t, arrival)
-            kfs.append(KF(t: settle, p: sp))
-            lastT = settle
+            stops.append(Stop(t: ev.t, p: meta.toSource(point: p)))
         }
-        self.kfs = kfs
+        self.stops = stops
     }
 
-    func eval(at t: Double) -> CGPoint? {
-        guard let first = kfs.first else { return nil }
-        if t <= first.t { return first.p }
-        if let last = kfs.last, t >= last.t { return last.p }
-        for i in 1..<kfs.count where t < kfs[i].t {
-            let a = kfs[i - 1], b = kfs[i]
-            let u = cursorEase.eased((t - a.t) / max(0.0001, b.t - a.t))
+    /// Back-compat point-only accessor.
+    func eval(at t: Double) -> CGPoint? { state(at: t)?.point }
+
+    /// Cursor position + opacity at time `t`.
+    func state(at t: Double) -> State? {
+        guard let first = stops.first else { return nil }
+        if t <= first.t { return State(point: first.p, alpha: 1) }
+        if let last = stops.last, t >= last.t {
+            // After the final action, fade out if we linger.
+            let idle = t - last.t
+            let a = idle > idleHide ? max(0, 1 - (idle - idleHide) / 0.5) : 1
+            return State(point: last.p, alpha: a)
+        }
+        // Find the bracketing stops: held at `a` until `travel` before `b`.
+        for i in 1..<stops.count where t < stops[i].t {
+            let a = stops[i - 1], b = stops[i]
+            let moveStart = b.t - travel
+            if t < moveStart {
+                // Holding at a. Fade out when the hold is long, fade back in as the
+                // move approaches.
+                let held = t - a.t
+                let untilMove = moveStart - t
+                var alpha = 1.0
+                if held > idleHide { alpha = max(0, 1 - (held - idleHide) / 0.5) }
+                if untilMove < 0.5 { alpha = max(alpha, 1 - untilMove / 0.5) }  // fade back in
+                return State(point: a.p, alpha: alpha)
+            }
+            // Travelling a → b with a snappy ease-out + faint arc.
+            let u = cursorEase.eased((t - moveStart) / travel)
             var p = CGPoint(x: lerp(a.p.x, b.p.x, u), y: lerp(a.p.y, b.p.y, u))
-            // A slight arc — real hands don't move in straight lines. Perpendicular
-            // offset peaks mid-travel (sin), scaled to distance and capped.
             let dx = b.p.x - a.p.x, dy = b.p.y - a.p.y
             let len = (dx * dx + dy * dy).squareRoot()
-            if len > 40 {
-                let arc = min(len * 0.12, 90) * sin(.pi * u)
+            if len > 60 {
+                let arc = min(len * 0.06, 36) * sin(.pi * u)   // subtle, not a loop
                 p.x += (-dy / len) * arc
                 p.y += (dx / len) * arc
             }
-            return p
+            return State(point: p, alpha: 1)
         }
-        return kfs[kfs.count - 1].p
+        return State(point: stops[stops.count - 1].p, alpha: 1)
     }
 }
 
@@ -403,13 +485,20 @@ struct OverlayTrack {
     /// The active caption: latest one whose start has passed and that hasn't been
     /// superseded by the next caption (or timed out).
     func caption(at t: Double) -> String? {
-        var active: String?
+        captionState(at: t)?.text
+    }
+
+    /// Active caption with its animation envelope: `age` = seconds since it
+    /// appeared (for a fade/rise-in), `remaining` = seconds until it leaves (for a
+    /// fade-out). Lets the renderer animate captions instead of hard-popping them.
+    func captionState(at t: Double) -> (text: String, age: Double, remaining: Double)? {
+        var result: (String, Double, Double)?
         for (i, cap) in captions.enumerated() where cap.t <= t {
             let nextT = i + 1 < captions.count ? captions[i + 1].t : Double.greatestFiniteMagnitude
             let end = min(cap.t + captionHold, nextT)
-            if t < end { active = cap.text }
+            if t < end { result = (cap.text, t - cap.t, end - t) }
         }
-        return active
+        return result
     }
 
     func keyPill(at t: Double) -> String? {
@@ -485,10 +574,8 @@ final class TextCache {
     func image(_ text: String, fontSize: CGFloat, weight: NSFont.Weight, color: NSColor) -> CGImage? {
         let key = "\(Int(fontSize))|\(weight.rawValue)|\(color.hashValue)|\(text)"
         if let hit = cache[key] { return hit }
-        // Rounded system design reads softer/friendlier — the Figma/Apple caption feel.
-        let plain = NSFont.systemFont(ofSize: fontSize, weight: weight)
-        let font = plain.fontDescriptor.withDesign(.rounded)
-            .flatMap { NSFont(descriptor: $0, size: fontSize) } ?? plain
+        // Geist — the RackMind brand typeface — so rendered text matches the site.
+        let font = BrandFont.sans(size: fontSize, weight: weight)
         let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: color,

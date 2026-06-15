@@ -6,34 +6,57 @@
   "look": {
     "background": "#070a16,#101a3a",
     "fps": 60,
-    "zoom": 1.9,
-    "padding": 0.09,
+    "zoom": 1.35,
+    "padding": 0.1,
     "cornerRadius": 0.014,
     "cursor": true,
     "captions": true,
-    "zoomIn": 0.55,
-    "zoomHold": 1.4,
-    "zoomOut": 0.6,
-    "tilt": { "y": -8, "x": 4 },
+    "zoomIn": 0.34,
+    "zoomHold": 1.3,
+    "zoomOut": 0.5,
+    "tilt": { "y": -10, "x": 4 },
     "perspective": 3.8,
-    "spring": { "enabled": true, "stiffness": 150, "damping": 18 }
+    "spring": { "enabled": true, "stiffness": 280, "damping": 30 },
+    "glow": { "intensity": 0.4, "color": "#10B981" },
+    "vignette": 0.2,
+    "leftAnchorBias": 0.32,
+    "timeWarp": [
+      { "from": 10.9, "to": 17.3, "speed": 8, "blur": 14 }
+    ],
+    "focus": [
+      { "at": 18.8, "hold": 5.6, "x": 0.17, "y": 0.09, "w": 0.55, "h": 0.46, "zoom": 1.42 }
+    ],
+    "intro": {
+      "headline": "Stop SSH'ing around.",
+      "sub": "Your homelab, in plain English.",
+      "hold": 1.5,
+      "settle": 0.9,
+      "accent": "#10B981"
+    },
+    "outro": {
+      "wordmark": "RackMind",
+      "tagline": "Your homelab, handled.",
+      "cta": "rackmind.ai",
+      "fromEnd": 3.4,
+      "accent": "#10B981"
+    }
   },
   "steps": [
-    { "do": "activate", "say": "Stop SSH'ing around." },
+    { "do": "activate" },
     { "do": "wait", "ms": 2600 },
     { "do": "click", "role": "AXButton", "label": "new-chat", "say": "Just ask." },
     { "do": "wait", "ms": 900 },
     { "do": "click", "label": "chat-composer" },
     { "do": "wait", "ms": 500 },
-    { "do": "type", "text": "Deploy Jellyfin and Caddy reverse proxy to node-01.", "say": "Plain English. Your whole fleet." },
+    { "do": "type", "text": "Deploy a Caddy reverse proxy on kgv for jellyfin.krishanator.com to 192.168.1.214:8096. Go ahead.", "say": "Plain English. Your whole fleet." },
     { "do": "wait", "ms": 1400 },
     { "do": "press", "keys": "return", "say": "It reads your real fleet, plans, and provisions — with your approval." },
     { "do": "wait", "ms": 17000 },
-    { "do": "click", "role": "AXButton", "label": "nav-dashboard", "say": "Your entire cluster." },
-    { "do": "wait", "ms": 2400, "say": "Handled." },
-    { "do": "click", "role": "AXButton", "label": "nav-knowledge", "say": "It remembers every box you run." },
-    { "do": "wait", "ms": 2200 },
-    { "do": "click", "role": "AXButton", "label": "nav-chat", "say": "RackMind" },
+    { "do": "click", "role": "AXButton", "label": "nav-dashboard", "say": "Your entire cluster — every node, every container." },
+    { "do": "wait", "ms": 4800, "say": "Handled." },
+    { "do": "click", "role": "AXButton", "label": "nav-knowledge", "say": "And it remembers every box you run." },
+    { "do": "wait", "ms": 4800 },
+    { "do": "click", "role": "AXButton", "label": "nav-chat" },
     { "do": "wait", "ms": 1800 }
   ]
 }
