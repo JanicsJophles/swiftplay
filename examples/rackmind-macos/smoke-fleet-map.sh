@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# swiftplay headless smoke sweep — rackmind-macos.
+# swiftplay headless smoke — rackmind-macos Fleet Map (RAC-443).
 #
-# Walks every sidebar page and every Settings tab by AX-pressing their stable
-# identifiers, and after each step asserts the app is STILL ALIVE. The point is
-# to catch macOS-26.x SwiftUI/Observation crashes-on-mount (the class of bug that
-# was RAC-328, where ⌘K's @Environment overlay assertion killed the app) before
-# users hit them.
+# Navigates to the Fleet Map page (an interactive 3D topology graph rendered in a
+# WKWebView via the vendored, offline 3d-force-graph asset) and asserts the app
+# stays alive. The point is to catch a crash-on-mount in the WKWebView host or the
+# JS data bridge before users hit it — the WebKit/WKScriptMessageHandler boundary
+# is exactly the kind of surface XCTest can't exercise (no TCC in CI, RAC-320).
 #
 # Runs fully headless: the app is launched hidden/background via `swiftplay
 # launch`, every input is delivered to its pid, and focus never leaves your
 # current app. Nothing appears on screen.
 #
-# Requirements: swiftplay built (xcrun --toolchain XcodeDefault), RackMind.app
-# built (make build), Accessibility granted to the terminal. See README.md.
+# Requirements: swiftplay built, RackMind.app built (make build), Accessibility
+# granted to the terminal. See README.md.
 #
 set -uo pipefail
 
@@ -25,8 +25,6 @@ SUPPORT="$HOME/Library/Application Support/RackMind"
 pass=0; fail=0
 PID=""
 
-# Per-step timeout watchdog (portable; macOS has no timeout(1)). Belt-and-braces
-# on top of swiftplay's own AX/SCK timeouts so no step can wedge the sweep.
 step() { # step <seconds> <cmd...>
   local secs="$1"; shift
   "$@" & local cmd_pid=$!
@@ -44,9 +42,7 @@ alive() { # alive <label> — assert the app process is still running
   fi
 }
 
-# --- Single-run lock. Overlapping runs once clobbered a real servers.json (a
-# second run backed up the first's dummy over the real backup). Atomic mkdir
-# lock makes concurrent runs impossible.
+# --- Single-run lock (shared with the other smoke scripts).
 LOCK="/tmp/swiftplay-rackmind.lock"
 if ! mkdir "$LOCK" 2>/dev/null; then
   echo "Another swiftplay run holds $LOCK — refusing to run concurrently." >&2
@@ -56,8 +52,6 @@ fi
 # --- Setup: seed a throwaway server so the app boots into MainView, not onboarding.
 seeded=0
 if [ -d "$SUPPORT" ]; then
-  # Back up ONLY a real config, and NEVER over an existing backup — so the dummy
-  # can never overwrite a real servers.json backup.
   if [ -f "$SUPPORT/servers.json" ] && [ ! -f "$SUPPORT/servers.json.swiftplay-bak" ] \
      && ! grep -q swiftplay-dummy "$SUPPORT/servers.json" 2>/dev/null; then
     cp "$SUPPORT/servers.json" "$SUPPORT/servers.json.swiftplay-bak"
@@ -70,7 +64,7 @@ fi
 cleanup() {
   pkill -f "RackMind.app/Contents/MacOS/RackMind" 2>/dev/null
   pkill -f "hold-display" 2>/dev/null
-  defaults delete "$BUNDLE" ApplePersistenceIgnoreState 2>/dev/null  # RAC-432: launch set it to force the content window; don't leave it on the user's prefs
+  defaults delete "$BUNDLE" ApplePersistenceIgnoreState 2>/dev/null
   if [ "$seeded" = 1 ] && [ -f "$SUPPORT/servers.json.swiftplay-bak" ]; then
     mv -f "$SUPPORT/servers.json.swiftplay-bak" "$SUPPORT/servers.json"
   fi
@@ -82,31 +76,26 @@ pkill -f "RackMind.app/Contents/MacOS/RackMind" 2>/dev/null; sleep 1
 "$SWIFTPLAY" launch --path "$APP"; sleep 5
 PID=$(pgrep -f 'RackMind.app/Contents/MacOS/RackMind' | head -1)
 
-echo "swiftplay headless smoke sweep"
-echo "------------------------------"
+echo "swiftplay headless smoke — Fleet Map"
+echo "------------------------------------"
 alive "launch (hidden)"
 
-# Every sidebar page (identifiers from RAC-327).
-for page in chat dashboard audit securityAudit terminal knowledge alerts fleetMap settings; do
-  step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-$page" >/dev/null 2>&1
-  sleep 0.7
-  alive "nav-$page"
-done
+# Open the Fleet Map page and let the WKWebView + 3d-force-graph asset mount.
+step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-fleetMap" >/dev/null 2>&1
+sleep 2
+alive "nav-fleetMap (WKWebView mounted)"
 
-# Every Settings tab (we're on the Settings page after the loop above).
-for tab in account general credentials servers ai agent-rules skills advanced audit-log updates; do
-  step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "settings-tab-$tab" >/dev/null 2>&1
-  sleep 0.7
-  alive "settings-tab-$tab"
-done
+# Linger on the page — the page runs a fly-in + auto-orbit timer loop and the JS
+# data bridge; give it time to settle and assert no delayed crash.
+sleep 2
+alive "fleet map settled"
 
-# Back to chat, exercise the skill picker open/dismiss once more.
-step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-chat" >/dev/null 2>&1; sleep 0.5
-step 15 "$SWIFTPLAY" type "/" -b "$BUNDLE"; sleep 0.5
-alive "open skill picker"
-step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "skill-row-/monitor" >/dev/null 2>&1; sleep 0.5
-alive "complete skill via AX-press"
+# Navigate away and back to exercise teardown + remount of the web view.
+step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-dashboard" >/dev/null 2>&1; sleep 0.7
+alive "nav-dashboard (fleet map torn down)"
+step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-fleetMap" >/dev/null 2>&1; sleep 1.5
+alive "nav-fleetMap (remounted)"
 
-echo "------------------------------"
+echo "------------------------------------"
 echo "pass=$pass fail=$fail   (frontmost stayed: $(osascript -e 'tell application "System Events" to get name of first process whose frontmost is true' 2>/dev/null))"
 [ "$fail" = 0 ]
