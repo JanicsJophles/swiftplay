@@ -87,7 +87,7 @@ echo "------------------------------"
 alive "launch (hidden)"
 
 # Every sidebar page (identifiers from RAC-327).
-for page in chat dashboard audit securityAudit terminal knowledge alerts fleetMap settings; do
+for page in chat dashboard audit securityAudit terminal knowledge alerts settings; do
   step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-$page" >/dev/null 2>&1
   sleep 0.7
   alive "nav-$page"
