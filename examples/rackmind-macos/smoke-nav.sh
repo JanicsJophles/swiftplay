@@ -100,6 +100,30 @@ for tab in account general credentials servers ai agent-rules skills advanced au
   alive "settings-tab-$tab"
 done
 
+# RAC-458: container-detail must never "stick" across page changes. The detail
+# is pushed onto DashboardView's NavigationStack; navigating to another page must
+# pop it. We can't push a real detail here (no live Proxmox = no containers to
+# tap), but we CAN assert the regression guard: a container-detail tab
+# (`container-tab-overview`) must NOT be reachable on any non-dashboard page, and
+# the dashboard must still mount cleanly on re-entry after the refactor that
+# hoisted the path onto AppState. The mechanism itself is covered deterministically
+# by AppStateNavigationTests (make check).
+step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-dashboard" >/dev/null 2>&1; sleep 0.7
+alive "nav-dashboard (re-entry after refactor)"
+# A container-detail tab must NOT be present on the dashboard root (no detail pushed).
+if "$SWIFTPLAY" find --ax -b "$BUNDLE" -t "container-tab-overview" >/dev/null 2>&1; then
+  echo "  ✗ stale container detail present on dashboard root"; fail=$((fail+1))
+else
+  echo "  ✓ dashboard root shows the list, not a stale detail"; pass=$((pass+1))
+fi
+# Leaving the dashboard for another page must not leave a detail tab reachable.
+step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-alerts" >/dev/null 2>&1; sleep 0.7
+if "$SWIFTPLAY" find --ax -b "$BUNDLE" -t "container-tab-overview" >/dev/null 2>&1; then
+  echo "  ✗ container detail leaked onto the Alerts page"; fail=$((fail+1))
+else
+  echo "  ✓ no container detail leaked onto Alerts"; pass=$((pass+1))
+fi
+
 # Back to chat, exercise the skill picker open/dismiss once more.
 step 15 "$SWIFTPLAY" click --ax -b "$BUNDLE" -t "nav-chat" >/dev/null 2>&1; sleep 0.5
 step 15 "$SWIFTPLAY" type "/" -b "$BUNDLE"; sleep 0.5
