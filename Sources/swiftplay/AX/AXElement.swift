@@ -108,6 +108,17 @@ struct AXElement {
         return names
     }
 
+    /// Whether this element advertises the semantic press action — i.e. whether
+    /// it can be activated without synthesizing a mouse click.
+    ///
+    /// This is the test that lets `click` be headless by default: probe first,
+    /// and only fall back to the mouse (which costs the user their focus and
+    /// pointer) for the elements that genuinely cannot express a press —
+    /// Metal/Canvas hit areas and other custom-drawn surfaces.
+    var supportsPress: Bool {
+        actions.contains(kAXPressAction as String)
+    }
+
     /// Perform a semantic AX action (e.g. `kAXPressAction`). Unlike a synthesized
     /// mouse click this needs neither foreground focus nor cursor movement, so it
     /// works against a backgrounded app.
