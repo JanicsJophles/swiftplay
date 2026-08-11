@@ -36,5 +36,14 @@ let package = Package(
             name: "SwiftplayMenuBar",
             dependencies: ["SwiftplayCore"]
         ),
+        // Pure-logic unit tests. Everything that drives a real app needs
+        // Accessibility (TCC) permission and a GUI, so it lives in the example
+        // suites instead; this target covers the decision-making that can be
+        // checked without either — starting with the keyboard's
+        // character → virtual-keycode mapping.
+        .testTarget(
+            name: "KeyboardTests",
+            dependencies: ["swiftplay"]
+        ),
     ]
 )

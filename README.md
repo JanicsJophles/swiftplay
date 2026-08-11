@@ -10,6 +10,10 @@ tree by role/label/text, drive the keyboard, and click controls — with no Xcod
 project, no XCUITest, and no test bundle. It reads the app's live AX tree and
 synthesizes input events, so it works against any pid / bundle id from the outside.
 
+It also drives [**iOS apps in the Simulator**](#ios-apps-in-the-simulator) through
+that same substrate — the Simulator is a Mac app, and it bridges the simulated
+app's AX tree into macOS.
+
 ![swiftplay locating, driving, and verifying a native macOS app from the terminal — fully headless](docs/demo.gif)
 
 ## Why swiftplay exists
@@ -127,6 +131,7 @@ key-equivalents — see Background mode).
 ```sh
 swiftplay tree -b ai.rackmind.macos
 swiftplay tree -b ai.rackmind.macos --show-geometry
+swiftplay tree --simulator                    # the iOS app in the booted Simulator
 ```
 
 ### `inspect` — print the element under the mouse cursor
@@ -141,6 +146,7 @@ swiftplay inspect
 swiftplay find -t "Dashboard"
 swiftplay find -t skill-row-/monitor --role AXButton
 swiftplay find -t "Dashboard" --count
+swiftplay find --simulator -t flow.general.first_name   # inside the iOS Simulator
 ```
 
 `find` exits **non-zero when nothing matches**, so it doubles as a test
@@ -273,6 +279,70 @@ server** (your terminal, or the agent app launching it) must be granted
 Accessibility. AX-dependent tools return an error result with guidance if it
 isn't, rather than crashing the server.
 
+## iOS apps in the Simulator
+
+swiftplay also drives **iOS apps running in the iOS Simulator** — same AX
+substrate, no XCUITest, no test bundle. The reason it works is that
+**Simulator.app is itself a macOS app**, and it republishes the simulated app's
+accessibility tree as part of its own.
+
+```sh
+xcrun simctl boot "iPhone 17 Pro" && open -a Simulator   # then run your app
+
+swiftplay tree --simulator                     # the iOS app's tree, chrome-free
+swiftplay find --simulator -t "Continue"       # assert an element exists
+swiftplay tree --device "iPhone 17 Pro"        # pick among several booted devices
+```
+
+`--simulator` finds the booted device's window and scopes queries to its
+`iOSContentGroup`, so you don't need to know `com.apple.iphonesimulator` and
+don't have to wade through Simulator's toolbar and menu bar.
+
+That scoping is a **correctness** feature. `find` is an assertion oracle, and
+unscoped it happily matches Simulator's own chrome:
+
+```sh
+$ swiftplay find -b com.apple.iphonesimulator -t "Device" --count
+12          # every match is a Simulator menu item — a test would pass wrongly
+$ swiftplay find --simulator -t "Device" --count
+0           # correct: the iOS app has no such element (exits non-zero)
+```
+
+**Accessibility identifiers survive the bridge**, which is what makes this
+useful. A Flutter widget wrapped in `Semantics(identifier:)`:
+
+```dart
+Semantics(
+  identifier: 'flow.general.first_name',
+  child: TextField(decoration: InputDecoration(hintText: 'Enter First Name')),
+)
+```
+
+…comes back as a uniquely addressable element, so you assert on stable IDs rather
+than on translatable copy:
+
+```
+AXTextField #flow.general.first_name desc="Enter First Name"
+AXTextField #flow.general.phone      desc="Enter Phone"
+AXButton    desc="Continue" [disabled]
+```
+
+The same applies to SwiftUI's `.accessibilityIdentifier(_:)` and UIKit's
+`accessibilityIdentifier`.
+
+> ⚠️ **`type` does not work against the Simulator yet.** Typing `"Krish"` produces
+> `"Aaaaa"` — right length, every character wrong. swiftplay posts a `CGEvent`
+> with virtual keycode `0` and overrides the character via
+> `keyboardSetUnicodeString`; native Mac apps honour that override, the Simulator
+> ignores it and types the keycode (`kVK_ANSI_A`). A fix is tracked separately.
+> `tree`, `find`, `click` and `screenshot` are unaffected.
+
+**Physical iOS devices are out of scope** — there's no macOS Accessibility bridge
+to real hardware, so there is nothing to attach to. Use XCUITest there.
+
+Full guide, including device selection, limitations, and troubleshooting:
+[`docs/ios-simulator.md`](./docs/ios-simulator.md).
+
 ## Menu-bar control center
 
 `swiftplay-menubar` is a tiny menu-bar app (no Dock icon) that reads and writes
@@ -314,6 +384,9 @@ Pass `--foreground` to bring the target app forward first. You need it for:
 
 ## Known limitations
 
+- **`type` is broken against the iOS Simulator** — it types the wrong characters
+  (right count, all "a"-ish). See
+  [iOS apps in the Simulator](#ios-apps-in-the-simulator). Mac targets are fine.
 - Plain **`Tab` as a command key** is not delivered as a command via CGEvent — it
   reaches the focused field but doesn't trigger AppKit's `doCommandBy:` (e.g.
   command-completion). Use **`click --ax`** to perform the element's action
@@ -342,5 +415,3 @@ a hosted runner). Bug reports want an AX-tree slice; new gotchas go in
 ## License
 
 [Apache License 2.0](./LICENSE). Use it, fork it, build on it.
-</content>
-</invoke>

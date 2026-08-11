@@ -13,6 +13,12 @@ struct FindCommand: ParsableCommand {
     @Option(name: .long, help: "Process ID. Use either --bundle-id or --pid.")
     var pid: Int32?
 
+    @Flag(name: .long, help: "Search the app running in the booted iOS Simulator, scoped to its content group (skips Simulator's window chrome and menu bar).")
+    var simulator: Bool = false
+
+    @Option(name: .long, help: "Simulator device name or UDID, when more than one is booted. Implies --simulator.")
+    var device: String?
+
     @Option(name: .long, help: "Filter by AX role substring, e.g. AXStaticText, AXButton.")
     var role: String?
 
@@ -32,26 +38,33 @@ struct FindCommand: ParsableCommand {
             throw ExitCode(2)
         }
 
-        let target: TargetApp
-        if let bundleId {
-            guard let found = TargetApp.find(bundleId: bundleId) else {
-                FileHandle.standardError.write(Data("No running app found with bundle id '\(bundleId)'.\n".utf8))
-                throw ExitCode(1)
-            }
-            target = found
-        } else if let pid {
-            guard let found = TargetApp.find(pid: pid) else {
-                FileHandle.standardError.write(Data("No process with pid \(pid).\n".utf8))
-                throw ExitCode(1)
-            }
-            target = found
+        // --simulator scopes the search to the simulated app's content group, so
+        // Simulator's own toolbar/menu-bar text can never satisfy an assertion.
+        let root: AXElement
+        if simulator || device != nil {
+            root = try Simulator.resolve(device: device).root
         } else {
-            FileHandle.standardError.write(Data("Specify --bundle-id or --pid.\n".utf8))
-            throw ExitCode(1)
+            let target: TargetApp
+            if let bundleId {
+                guard let found = TargetApp.find(bundleId: bundleId) else {
+                    FileHandle.standardError.write(Data("No running app found with bundle id '\(bundleId)'.\n".utf8))
+                    throw ExitCode(1)
+                }
+                target = found
+            } else if let pid {
+                guard let found = TargetApp.find(pid: pid) else {
+                    FileHandle.standardError.write(Data("No process with pid \(pid).\n".utf8))
+                    throw ExitCode(1)
+                }
+                target = found
+            } else {
+                FileHandle.standardError.write(Data("Specify --bundle-id, --pid, or --simulator.\n".utf8))
+                throw ExitCode(1)
+            }
+            root = AXElement.application(pid: target.pid)
         }
 
-        let app = AXElement.application(pid: target.pid)
-        let matches = Query.find(in: app, role: role, text: text, maxDepth: maxDepth)
+        let matches = Query.find(in: root, role: role, text: text, maxDepth: maxDepth)
 
         if count {
             print(matches.count)

@@ -13,6 +13,12 @@ struct TreeCommand: ParsableCommand {
     @Option(name: .long, help: "Process ID. Use either --bundle-id or --pid.")
     var pid: Int32?
 
+    @Flag(name: .long, help: "Target the app running in the booted iOS Simulator, scoped to its content group (skips Simulator's window chrome and menu bar).")
+    var simulator: Bool = false
+
+    @Option(name: .long, help: "Simulator device name or UDID, when more than one is booted. Implies --simulator.")
+    var device: String?
+
     @Option(name: .long, help: "Maximum tree depth to print.")
     var maxDepth: Int = 30
 
@@ -26,29 +32,39 @@ struct TreeCommand: ParsableCommand {
             throw ExitCode(2)
         }
 
-        let target: TargetApp
-        if let bundleId {
-            guard let found = TargetApp.find(bundleId: bundleId) else {
-                FileHandle.standardError.write(Data("No running app found with bundle id '\(bundleId)'.\n".utf8))
-                throw ExitCode(1)
-            }
-            target = found
-        } else if let pid {
-            guard let found = TargetApp.find(pid: pid) else {
-                FileHandle.standardError.write(Data("No process with pid \(pid).\n".utf8))
-                throw ExitCode(1)
-            }
-            target = found
+        // --simulator roots the walk at the simulated app's content group rather
+        // than at an application element, so the output is the iOS app's tree and
+        // nothing else.
+        let root: AXElement
+        if simulator || device != nil {
+            let target = try Simulator.resolve(device: device)
+            print("# \(target.device.displayName) [\(target.device.udid)] via Simulator (pid \(target.app.pid))")
+            root = target.root
         } else {
-            FileHandle.standardError.write(Data("Specify --bundle-id or --pid.\n".utf8))
-            throw ExitCode(1)
+            let target: TargetApp
+            if let bundleId {
+                guard let found = TargetApp.find(bundleId: bundleId) else {
+                    FileHandle.standardError.write(Data("No running app found with bundle id '\(bundleId)'.\n".utf8))
+                    throw ExitCode(1)
+                }
+                target = found
+            } else if let pid {
+                guard let found = TargetApp.find(pid: pid) else {
+                    FileHandle.standardError.write(Data("No process with pid \(pid).\n".utf8))
+                    throw ExitCode(1)
+                }
+                target = found
+            } else {
+                FileHandle.standardError.write(Data("Specify --bundle-id, --pid, or --simulator.\n".utf8))
+                throw ExitCode(1)
+            }
+
+            print("# \(target.localizedName ?? "?") (\(target.bundleId ?? "?"), pid \(target.pid))")
+            root = AXElement.application(pid: target.pid)
         }
 
-        print("# \(target.localizedName ?? "?") (\(target.bundleId ?? "?"), pid \(target.pid))")
-
-        let app = AXElement.application(pid: target.pid)
         printTree(
-            app,
+            root,
             depth: 0,
             maxDepth: maxDepth,
             prefix: "",
