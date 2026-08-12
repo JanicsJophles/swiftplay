@@ -28,6 +28,9 @@ struct FindCommand: ParsableCommand {
     @Option(name: .long, help: "Maximum tree depth to search.")
     var maxDepth: Int = 40
 
+    @Option(name: .long, help: "Seconds to wait for a match before failing. Set 0 for a single immediate query.")
+    var timeout: Double = 5
+
     @Flag(name: .long, help: "Print only the match count, not each element.")
     var count: Bool = false
 
@@ -64,7 +67,7 @@ struct FindCommand: ParsableCommand {
             root = AXElement.application(pid: target.pid)
         }
 
-        let matches = Query.find(in: root, role: role, text: text, maxDepth: maxDepth)
+        let matches = Query.waitForMatches(in: root, role: role, text: text, maxDepth: maxDepth, timeout: timeout)
 
         if count {
             print(matches.count)

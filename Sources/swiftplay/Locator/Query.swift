@@ -42,6 +42,27 @@ enum Query {
         return results
     }
 
+    /// Poll the live AX tree until a selector resolves or the deadline expires.
+    /// A newly launched SwiftUI app can publish its NSRunningApplication before
+    /// it has constructed the first accessibility subtree, so a single walk is
+    /// observably racy immediately after `swiftplay launch`.
+    static func waitForMatches(
+        in root: AXElement,
+        role: String?,
+        text: String?,
+        maxDepth: Int,
+        timeout: TimeInterval
+    ) -> [ElementMatch] {
+        let deadline = Date().addingTimeInterval(max(0, timeout))
+        repeat {
+            let matches = find(in: root, role: role, text: text, maxDepth: maxDepth)
+            if !matches.isEmpty { return matches }
+            guard Date() < deadline else { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        } while true
+        return []
+    }
+
     private static func walk(_ elem: AXElement, depth: Int, maxDepth: Int, visit: (AXElement) -> Void) {
         visit(elem)
         if depth >= maxDepth { return }
