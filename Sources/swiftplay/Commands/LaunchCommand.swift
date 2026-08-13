@@ -43,6 +43,8 @@ struct LaunchCommand: ParsableCommand {
             throw ExitCode(1)
         }
 
+        let resolvedBundleId = bundleId ?? Bundle(url: URL(fileURLWithPath: appPath))?.bundleIdentifier
+
         if offscreen, !AccessibilityPermission.isTrusted {
             // --offscreen has to move the window via AX after launch.
             AccessibilityPermission.printGuidance()
@@ -66,7 +68,7 @@ struct LaunchCommand: ParsableCommand {
         // the headless modes; the caller is expected to clear it after the run
         // (the smoke scripts' cleanup trap does). See examples/rackmind-macos
         // FINDINGS.md "Gotcha 4".
-        if !show, let restorationBundleId = bundleId ?? Bundle(url: URL(fileURLWithPath: appPath))?.bundleIdentifier {
+        if !show, let restorationBundleId = resolvedBundleId {
             suppressWindowRestoration(bundleId: restorationBundleId)
         }
 
@@ -96,8 +98,21 @@ struct LaunchCommand: ParsableCommand {
             throw ExitCode(proc.terminationStatus)
         }
 
+        // `/usr/bin/open` only confirms that Launch Services accepted the
+        // request. It can return before a SwiftUI app creates its first window,
+        // which made `launch --show` falsely look ready and immediately broke a
+        // following `tree` or `screenshot`. For the visible mode, wait until the
+        // accessibility API exposes a real content window so success has a
+        // useful, deterministic meaning.
+        if show {
+            guard let resolvedBundleId, waitForWindow(bundleId: resolvedBundleId, timeout: 12) else {
+                FileHandle.standardError.write(Data("Launched \(appPath), but no app window became available within 12 seconds.\n".utf8))
+                throw ExitCode(1)
+            }
+        }
+
         if offscreen {
-            guard let resolvedBundleId = bundleId ?? Bundle(url: URL(fileURLWithPath: appPath))?.bundleIdentifier else {
+            guard let resolvedBundleId else {
                 FileHandle.standardError.write(Data("Launched \(appPath), but couldn't resolve its bundle id to park it off-screen.\n".utf8))
                 return
             }
@@ -136,6 +151,18 @@ struct LaunchCommand: ParsableCommand {
         } catch {
             // best-effort — fall through to the original behaviour
         }
+    }
+
+    private func waitForWindow(bundleId: String, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first,
+               !AXElement.application(pid: running.processIdentifier).windows.isEmpty {
+                return true
+            }
+            usleep(150_000)
+        }
+        return false
     }
 
     /// Spawn `swiftplay hold-display` detached. It owns the virtual display and
