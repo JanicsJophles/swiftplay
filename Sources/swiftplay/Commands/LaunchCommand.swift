@@ -70,6 +70,8 @@ struct LaunchCommand: ParsableCommand {
         // FINDINGS.md "Gotcha 4".
         if !show, let restorationBundleId = resolvedBundleId {
             suppressWindowRestoration(bundleId: restorationBundleId)
+        } else if show, let restorationBundleId = resolvedBundleId {
+            clearWindowRestorationSuppression(bundleId: restorationBundleId)
         }
 
         // `open -g` = don't bring to foreground; `-j` = launch hidden.
@@ -105,6 +107,7 @@ struct LaunchCommand: ParsableCommand {
         // state while waiting for AX to expose a real content window. This gives
         // `launch --show` deterministic semantics even after a headless run.
         if show {
+            requestApplicationActivation(bundleId: resolvedBundleId)
             guard let resolvedBundleId, waitForWindow(bundleId: resolvedBundleId, timeout: 12) else {
                 FileHandle.standardError.write(Data("Launched \(appPath), but no app window became available within 12 seconds.\n".utf8))
                 throw ExitCode(1)
@@ -150,6 +153,48 @@ struct LaunchCommand: ParsableCommand {
             proc.waitUntilExit()
         } catch {
             // best-effort — fall through to the original behaviour
+        }
+    }
+
+    /// Headless launches deliberately persist `ApplePersistenceIgnoreState`.
+    /// A later cold visible launch must undo that override or SwiftUI can start
+    /// menu-bar-only even though the app is activated in the foreground.
+    private func clearWindowRestorationSuppression(bundleId: String) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        proc.arguments = ["delete", bundleId, "ApplePersistenceIgnoreState"]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            // best-effort — the key may not exist yet
+        }
+    }
+
+    /// A cold SwiftUI `WindowGroup` may not instantiate its first scene from
+    /// `open` plus `NSRunningApplication.activate` alone. Sending the standard
+    /// application `activate` Apple event mirrors Finder/Dock activation and
+    /// reliably asks SwiftUI to create that initial window. The bundle id is an
+    /// argv value, never interpolated into AppleScript source.
+    private func requestApplicationActivation(bundleId: String?) {
+        guard let bundleId else { return }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = [
+            "-e", "on run argv",
+            "-e", "tell application id (item 1 of argv) to activate",
+            "-e", "end run",
+            bundleId
+        ]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+        } catch {
+            // best-effort — waitForWindow still retries AppKit activation
         }
     }
 
