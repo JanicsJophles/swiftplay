@@ -100,10 +100,10 @@ struct LaunchCommand: ParsableCommand {
 
         // `/usr/bin/open` only confirms that Launch Services accepted the
         // request. It can return before a SwiftUI app creates its first window,
-        // which made `launch --show` falsely look ready and immediately broke a
-        // following `tree` or `screenshot`. For the visible mode, wait until the
-        // accessibility API exposes a real content window so success has a
-        // useful, deterministic meaning.
+        // and reopening an already-running hidden app does not reliably unhide
+        // or activate it. For the visible mode, explicitly restore foreground
+        // state while waiting for AX to expose a real content window. This gives
+        // `launch --show` deterministic semantics even after a headless run.
         if show {
             guard let resolvedBundleId, waitForWindow(bundleId: resolvedBundleId, timeout: 12) else {
                 FileHandle.standardError.write(Data("Launched \(appPath), but no app window became available within 12 seconds.\n".utf8))
@@ -156,9 +156,12 @@ struct LaunchCommand: ParsableCommand {
     private func waitForWindow(bundleId: String, timeout: TimeInterval) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
-            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first,
-               !AXElement.application(pid: running.processIdentifier).windows.isEmpty {
-                return true
+            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).first {
+                if running.isHidden { running.unhide() }
+                if !running.isActive { running.activate(options: [.activateAllWindows]) }
+                if !AXElement.application(pid: running.processIdentifier).windows.isEmpty {
+                    return true
+                }
             }
             usleep(150_000)
         }
