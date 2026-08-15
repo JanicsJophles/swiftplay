@@ -92,7 +92,8 @@ swiftplay launch -b ai.rackmind.macos --show        # visible/foreground
 Launches the target **hidden + in the background** (`open -g -j`): the window never
 appears on screen and your current app keeps focus. AX queries and
 `CGEvent.postToPid` still reach a hidden app, so swiftplay drives it fully headless
-from there.
+from there. SwiftPlay also watches the target during startup and restores the most
+recent non-target app if the target overrides Launch Services by activating itself.
 
 `--offscreen` makes the app **truly invisible while still rendering** — the mode
 for a headless visual pass. It creates a *headless virtual display* (a real

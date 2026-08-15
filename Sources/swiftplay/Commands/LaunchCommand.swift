@@ -44,6 +44,7 @@ struct LaunchCommand: ParsableCommand {
         }
 
         let resolvedBundleId = bundleId ?? Bundle(url: URL(fileURLWithPath: appPath))?.bundleIdentifier
+        let initialFrontmost = NSWorkspace.shared.frontmostApplication
 
         if offscreen, !AccessibilityPermission.isTrusted {
             // --offscreen has to move the window via AX after launch.
@@ -120,11 +121,25 @@ struct LaunchCommand: ParsableCommand {
                 return
             }
             try spawnHolder(bundleId: resolvedBundleId)
-            // Give the detached holder a moment to find the window and move it
-            // off-screen before we return and the caller starts driving.
-            usleep(2_500_000)
+            // Give the detached holder time to park the window while defending
+            // the user's foreground app from targets that activate themselves.
+            FocusPreserver.guardBackgroundLaunch(
+                bundleId: resolvedBundleId,
+                initialFrontmost: initialFrontmost,
+                duration: 2.5,
+                hideTarget: false
+            )
             FileHandle.standardError.write(Data("Launched \(appPath) (offscreen — headless holder running for \(resolvedBundleId)).\n".utf8))
             return
+        }
+
+        if !show {
+            FocusPreserver.guardBackgroundLaunch(
+                bundleId: resolvedBundleId,
+                initialFrontmost: initialFrontmost,
+                duration: 1.25,
+                hideTarget: true
+            )
         }
 
         let mode = show ? "visible" : "hidden/background"

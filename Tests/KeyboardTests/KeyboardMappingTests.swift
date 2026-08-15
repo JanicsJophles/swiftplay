@@ -319,3 +319,40 @@ final class KeyboardMappingTests: XCTestCase {
         XCTAssertEqual(chars.first?.unicode, "é", "the character must survive as unicode")
     }
 }
+
+final class FrontmostAppTrackerTests: XCTestCase {
+    func testRestoresTheAppThatWasFocusedBeforeTargetActivation() {
+        var tracker = FrontmostAppTracker(initialPID: 101)
+
+        XCTAssertEqual(
+            tracker.observe(frontmostPID: 202, targetPID: 202),
+            101
+        )
+    }
+
+    func testFollowsAUserInitiatedFocusChangeDuringLaunch() {
+        var tracker = FrontmostAppTracker(initialPID: 101)
+
+        XCTAssertNil(tracker.observe(frontmostPID: 303, targetPID: 202))
+        XCTAssertEqual(
+            tracker.observe(frontmostPID: 202, targetPID: 202),
+            303
+        )
+    }
+
+    func testDoesNotRestoreTheTargetToItself() {
+        var tracker = FrontmostAppTracker(initialPID: 202)
+
+        XCTAssertNil(tracker.observe(frontmostPID: 202, targetPID: 202))
+    }
+
+    func testMissingFrontmostStateDoesNotEraseTheLastSafeApp() {
+        var tracker = FrontmostAppTracker(initialPID: 101)
+
+        XCTAssertNil(tracker.observe(frontmostPID: nil, targetPID: 202))
+        XCTAssertEqual(
+            tracker.observe(frontmostPID: 202, targetPID: 202),
+            101
+        )
+    }
+}
