@@ -21,6 +21,15 @@ struct AXElement {
         // Setting the timeout on the application object bounds messages to that app
         // (and its elements), so neither queries nor actions can hang indefinitely.
         AXUIElementSetMessagingTimeout(app, messagingTimeout)
+        // WebKit and a few other process-hosted UI frameworks publish only a
+        // placeholder child until an assistive client opts into their manual
+        // accessibility tree. Accessibility Inspector performs this handshake;
+        // without it WKWebView-backed apps appear as an empty AXGroup.
+        AXUIElementSetAttributeValue(
+            app,
+            "AXManualAccessibility" as CFString,
+            kCFBooleanTrue
+        )
         return AXElement(ref: app)
     }
 
